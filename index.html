@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>火箭起飛模擬器 | Rocket Launch Simulator</title>
+<meta name="description" content="用第一性原理拆解火箭：Falcon 9 / Starship / Saturn V / Long March 5 的材料、燃料、熱值、飛行力學全景模擬。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9A%80%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="rocket-icon">🚀</span>
+    <h1>火箭起飛模擬器</h1>
+    <span class="subtitle">Rocket Launch Simulator · 第一性原理拆解</span>
+  </div>
+  <nav class="rocket-picker" id="rocketPicker">
+    <button data-rocket="falcon9" class="active">Falcon 9</button>
+    <button data-rocket="starship">Starship</button>
+    <button data-rocket="saturn5">Saturn V</button>
+    <button data-rocket="longmarch5">Long March 5</button>
+  </nav>
+</header>
+
+<main class="main-grid">
+
+  <section class="viz-column">
+    <div class="canvas-wrap">
+      <canvas id="scene"></canvas>
+      <div class="hud">
+        <div class="hud-row"><span class="hud-label">T</span><span id="hudTime">+00:00</span></div>
+        <div class="hud-row"><span class="hud-label">ALT</span><span id="hudAlt">0.0 km</span></div>
+        <div class="hud-row"><span class="hud-label">VEL</span><span id="hudVel">0 m/s</span></div>
+        <div class="hud-row"><span class="hud-label">MACH</span><span id="hudMach">0.00</span></div>
+        <div class="hud-row"><span class="hud-label">STAGE</span><span id="hudStage">1</span></div>
+      </div>
+      <div class="event-banner" id="eventBanner"></div>
+    </div>
+
+    <div class="controls">
+      <button id="btnLaunch" class="btn-primary">🚀 LAUNCH</button>
+      <button id="btnPause" disabled>⏸ PAUSE</button>
+      <button id="btnReset">↻ RESET</button>
+      <label class="slider-label">
+        時間 ×<span id="timeScaleLbl">1</span>
+        <input type="range" id="timeScale" min="1" max="50" value="1">
+      </label>
+    </div>
+  </section>
+
+  <aside class="dashboard-column">
+
+    <!-- 即時儀表 -->
+    <div class="panel">
+      <h2>📊 即時儀表</h2>
+      <div class="gauges">
+        <div class="gauge">
+          <div class="gauge-label">高度</div>
+          <div class="gauge-value"><span id="dAlt">0</span> <small>km</small></div>
+          <div class="gauge-bar"><div class="gauge-fill" id="dAltBar" style="width:0%"></div></div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">速度</div>
+          <div class="gauge-value"><span id="dVel">0</span> <small>m/s</small></div>
+          <div class="gauge-bar"><div class="gauge-fill" id="dVelBar" style="width:0%"></div></div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">Mach</div>
+          <div class="gauge-value"><span id="dMach">0.00</span></div>
+          <div class="gauge-bar"><div class="gauge-fill" id="dMachBar" style="width:0%"></div></div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">燃料</div>
+          <div class="gauge-value"><span id="dFuel">100</span> <small>%</small></div>
+          <div class="gauge-bar"><div class="gauge-fill fuel" id="dFuelBar" style="width:100%"></div></div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">加速度</div>
+          <div class="gauge-value"><span id="dAcc">1.0</span> <small>g</small></div>
+          <div class="gauge-bar"><div class="gauge-fill accel" id="dAccBar" style="width:20%"></div></div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">動壓 Q</div>
+          <div class="gauge-value"><span id="dQ">0</span> <small>kPa</small></div>
+          <div class="gauge-bar"><div class="gauge-fill" id="dQBar" style="width:0%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 力學圖 -->
+    <div class="panel">
+      <h2>⚖️ 飛行受力（即時）</h2>
+      <div class="forces">
+        <div class="force-row">
+          <span class="force-name">推力 F<sub>T</sub></span>
+          <div class="force-bar-outer"><div class="force-bar thrust" id="fThrust"></div></div>
+          <span class="force-val" id="fThrustVal">0 kN</span>
+        </div>
+        <div class="force-row">
+          <span class="force-name">重力 F<sub>g</sub></span>
+          <div class="force-bar-outer"><div class="force-bar gravity" id="fGravity"></div></div>
+          <span class="force-val" id="fGravityVal">0 kN</span>
+        </div>
+        <div class="force-row">
+          <span class="force-name">阻力 F<sub>d</sub></span>
+          <div class="force-bar-outer"><div class="force-bar drag" id="fDrag"></div></div>
+          <span class="force-val" id="fDragVal">0 kN</span>
+        </div>
+        <div class="force-row net">
+          <span class="force-name">淨推 F<sub>net</sub></span>
+          <div class="force-bar-outer"><div class="force-bar net" id="fNet"></div></div>
+          <span class="force-val" id="fNetVal">0 kN</span>
+        </div>
+      </div>
+      <div class="mini-note">重力隨高度衰減：g(h) = g₀·(R⊕/(R⊕+h))²；大氣密度 ρ(h) = ρ₀·exp(-h/H)，H≈8500 m</div>
+    </div>
+
+    <!-- 火箭資訊 -->
+    <div class="panel">
+      <h2>🔧 火箭規格 <span id="rocketName" class="tag"></span></h2>
+      <div class="specs" id="specs"></div>
+    </div>
+
+    <!-- 材料組成 -->
+    <div class="panel">
+      <h2>🧬 材料組成</h2>
+      <div id="materials" class="materials"></div>
+    </div>
+
+    <!-- 燃料 -->
+    <div class="panel">
+      <h2>⛽ 燃料系統</h2>
+      <div id="fuel-info" class="fuel-info"></div>
+    </div>
+
+    <!-- 階段時序 -->
+    <div class="panel">
+      <h2>⏱ 任務階段</h2>
+      <ol id="timeline" class="timeline"></ol>
+    </div>
+
+    <!-- 第一性原理教學卡 -->
+    <div class="panel first-principles-panel">
+      <h2>🧠 第一性原理拆解</h2>
+      <div id="firstPrinciples" class="fp-cards"></div>
+    </div>
+
+  </aside>
+</main>
+
+<footer class="footer">
+  <div>
+    資料來源：SpaceX、NASA、ESA、CNSA、Boeing 公開文件。物理模型：<strong>Tsiolkovsky 火箭方程 + 標準大氣 + 平方反比重力</strong>。
+    模擬為教學/概念用途，非工程級精度。
+  </div>
+  <div class="footer-links">
+    <a href="docs/report.html">詳細技術報告</a> ·
+    <a href="https://github.com/Kunzhi0810/rocket-launch-sim">GitHub</a> ·
+    <span>© 2026 Ken · CC-BY-SA</span>
+  </div>
+</footer>
+
+<script src="js/data.js"></script>
+<script src="js/education.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
