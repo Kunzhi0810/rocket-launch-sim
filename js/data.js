@@ -46,9 +46,9 @@ const ROCKETS = {
         thrust_vac: 8227e3,    // N (真空)
         isp_sl: 282,           // s
         isp_vac: 311,
-        mass_wet: 433100,      // kg，一級推進劑質量 + dry
+        mass_wet: 410250,      // kg，一級（推進劑 ~384.6 t + dry 25.6 t）
         mass_dry: 25600,       // kg
-        burn_time: 162,        // s，實測平均
+        burn_time: 162,        // s
       },
       {
         name: "Second Stage",
@@ -58,7 +58,7 @@ const ROCKETS = {
         thrust_vac: 981e3,
         isp_sl: 311,
         isp_vac: 348,
-        mass_wet: 115954,
+        mass_wet: 116000,      // kg（推進劑 ~112.1 t + dry 3.9 t）
         mass_dry: 3900,
         burn_time: 397,
       },
@@ -95,6 +95,17 @@ const ROCKETS = {
       note: "RP-1 常溫可儲、密度高、渦輪泵設計成熟；缺點是積碳（結焦）→ 舊 Merlin 版本無法重用",
     },
 
+    // 真實遙測（FlightClub / SpaceX 官方 / NASA Launch Report）
+    telemetry: {
+      maxQ_kPa: 35,          // 實測 30-35 kPa 之間
+      maxQ_time_s: 78,       // T+1:18
+      MECO_alt_km: 78,       // 一級關機高度
+      MECO_vel_ms: 2400,     // 一級關機速度
+      SECO_alt_km: 200,      // LEO 軌道高度
+      SECO_vel_ms: 7800,     // 軌道速度
+      MECO_time_s: 162,
+    },
+
     events: [
       { t: 0,   name: "T-0: Liftoff",                    detail: "9 顆 Merlin 全部點火，離架瞬間 T/W ≈ 1.4" },
       { t: 10,  name: "T+10: Tower clear",               detail: "離架完成，開始 pitch-over（gravity turn）" },
@@ -127,24 +138,25 @@ const ROCKETS = {
         name: "Super Heavy (Booster)",
         propellant: "CH₄ / LOX",
         engines: { type: "Raptor 3", count: 33, cycle: "Full-Flow Staged Combustion" },
-        thrust_sl: 7590e3 * 33 / 33,   // ≈ 7590 t total → newton
-        thrust_vac: 8400e3 * 33 / 33,
+        // Raptor 3: 280 tf 海平面, 350 s Isp, 350 bar chamber pressure
+        thrust_sl: 280e3 * G0 * 33,    // 280 tf × 9.80665 × 33 顆 ≈ 90.6 MN
+        thrust_vac: 305e3 * G0 * 33,   // 305 tf × 33
         isp_sl: 327,
         isp_vac: 350,
-        mass_wet: 3675e3,
+        mass_wet: 3675e3,               // 3400 t 推進劑 + 275 t dry
         mass_dry: 275e3,
         burn_time: 155,
       },
       {
         name: "Starship (Ship)",
         propellant: "CH₄ / LOX",
-        engines: { type: "Raptor Vacuum + Raptor SL", count: 6, cycle: "Full-Flow Staged" },
-        thrust_sl: 1400e3 * 3,
-        thrust_vac: 2745e3 * 3,        // 3 顆真空優化
+        engines: { type: "3 × Raptor SL + 3 × Raptor Vac", count: 6, cycle: "Full-Flow Staged" },
+        thrust_sl: (280e3 + 305e3) * G0 * 3,   // 3 顆海平面 + 3 顆真空型
+        thrust_vac: 305e3 * G0 * 6,             // 全部視為真空型
         isp_sl: 350,
         isp_vac: 380,
-        mass_wet: 1500e3,
-        mass_dry: 150e3,
+        mass_wet: 1450e3,               // 1200 t 推進劑 + 250 t dry (v3)
+        mass_dry: 250e3,
         burn_time: 380,
       },
     ],
@@ -177,6 +189,16 @@ const ROCKETS = {
       isp_sl: 327,
       chamberPressure: 350,      // bar (Raptor 3 目標)
       note: "選甲烷是為了『火星就地製造』：CO₂ + H₂ (Sabatier 反應) 可原地產甲烷。積碳少 → 快速重用。全流分級是史上首次量產。",
+    },
+
+    telemetry: {
+      maxQ_kPa: 40,
+      maxQ_time_s: 55,
+      MECO_alt_km: 65,
+      MECO_vel_ms: 2000,
+      SECO_alt_km: 200,
+      SECO_vel_ms: 7500,
+      MECO_time_s: 155,
     },
 
     events: [
@@ -274,6 +296,16 @@ const ROCKETS = {
       note: "S-IC 用 RP-1（高推力起飛）；S-II/S-IVB 換 LH₂（Isp 高、輕）。氫的儲存挑戰極大——體積是甲烷 6 倍，容器極大且需超級絕熱。",
     },
 
+    telemetry: {
+      maxQ_kPa: 33,
+      maxQ_time_s: 82,
+      MECO_alt_km: 68,
+      MECO_vel_ms: 2688,       // Apollo 11 實測
+      SECO_alt_km: 185,        // S-II 關機
+      SECO_vel_ms: 6890,       // S-II 關機速度
+      MECO_time_s: 168,
+    },
+
     events: [
       { t: 0,   name: "T-0: Liftoff",                detail: "5 顆 F-1，34.5 MN 推力，T/W ≈ 1.15" },
       { t: 80,  name: "T+1:20: Max-Q",              detail: "≈ 30 kPa" },
@@ -357,6 +389,17 @@ const ROCKETS = {
       isp_sl: 305,
       chamberPressure: 100,
       note: "採 hybrid 燃料：芯級用氫（高 Isp）、助推用 RP-1（高推力）。這是 1990s 後蘇聯 Zenit / 歐洲 Ariane 5 學來的整合設計。",
+    },
+
+    telemetry: {
+      maxQ_kPa: 34,
+      maxQ_time_s: 80,
+      MECO_alt_km: 90,
+      MECO_vel_ms: 3500,
+      SECO_alt_km: 200,
+      SECO_vel_ms: 7800,
+      MECO_time_s: 175,
+      note: "LM5 二級 T/W 極低 (0.22) 需 coast+多次點火，此教學模型不建 coast",
     },
 
     events: [

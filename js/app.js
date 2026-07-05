@@ -22,13 +22,109 @@ function selectRocket(name) {
   sim = new RocketSim(rocket);
   scene.setRocket(name);
   edu.reset();
+  simMax = { alt: 0, altT: 0, mecoV: null, mecoAlt: null, mecoT: null, secoV: null, secoAlt: null };
   updateStaticPanels(rocket);
   renderTimeline(rocket, sim.getState());
+  renderAccuracy(rocket);
   updateDashboard();
   $("btnLaunch").disabled = false;
   $("btnPause").disabled = true;
   running = false;
   $("btnPause").textContent = "⏸ PAUSE";
+}
+
+// 追蹤模擬產出的關鍵事件量
+let simMax = { alt: 0, altT: 0, mecoV: null, mecoAlt: null, mecoT: null, secoV: null, secoAlt: null };
+let lastStageIdx = 0;
+
+function trackSimMilestones(state) {
+  if (state.altitude > simMax.alt) {
+    simMax.alt = state.altitude;
+    simMax.altT = state.t;
+  }
+  // 一級 → 二級切換瞬間 = MECO
+  if (state.stage - 1 > lastStageIdx) {
+    if (lastStageIdx === 0) {
+      simMax.mecoV = state.velocity;
+      simMax.mecoAlt = state.altitude;
+      simMax.mecoT = state.t;
+    }
+    lastStageIdx = state.stage - 1;
+  }
+  // 最終進入 ORBIT/LANDED
+  if ((state.status === "ORBIT" || state.status === "LANDED") && simMax.secoV === null) {
+    simMax.secoV = state.velocity;
+    simMax.secoAlt = state.altitude;
+  }
+}
+
+function renderAccuracy(rocket) {
+  const tel = rocket.telemetry;
+  const $t = $("accuracyTable");
+  if (!tel) {
+    $t.innerHTML = "<div class='mini-note'>此火箭無公開遙測基準</div>";
+    return;
+  }
+
+  function errorClass(err) {
+    if (err === null || err === undefined) return "pending";
+    const e = Math.abs(err);
+    if (e < 10) return "good";
+    if (e < 25) return "ok";
+    return "bad";
+  }
+  function errorText(err) {
+    if (err === null || err === undefined) return "—";
+    const sign = err >= 0 ? "+" : "";
+    return `${sign}${err.toFixed(1)}%`;
+  }
+
+  const rows = [];
+
+  // Max-Q
+  const simQ = sim.maxDynQ / 1000;
+  const errQ = tel.maxQ_kPa ? ((simQ - tel.maxQ_kPa) / tel.maxQ_kPa * 100) : null;
+  rows.push({ label: "Max-Q", real: `${tel.maxQ_kPa} kPa`, mine: `${simQ.toFixed(1)} kPa`, err: sim.maxDynQ > 100 ? errQ : null });
+
+  // Max-Q 時間
+  const errQT = tel.maxQ_time_s && sim.maxDynQTime > 0 ? ((sim.maxDynQTime - tel.maxQ_time_s) / tel.maxQ_time_s * 100) : null;
+  rows.push({ label: "Max-Q 時間", real: `T+${tel.maxQ_time_s}s`, mine: `T+${sim.maxDynQTime.toFixed(0)}s`, err: sim.maxDynQTime > 0 ? errQT : null });
+
+  // MECO 速度
+  const errMecoV = simMax.mecoV && tel.MECO_vel_ms ? ((simMax.mecoV - tel.MECO_vel_ms) / tel.MECO_vel_ms * 100) : null;
+  rows.push({ label: "MECO 速度", real: `${tel.MECO_vel_ms} m/s`, mine: simMax.mecoV ? `${simMax.mecoV.toFixed(0)} m/s` : "—", err: errMecoV });
+
+  // MECO 高度
+  const errMecoA = simMax.mecoAlt && tel.MECO_alt_km ? ((simMax.mecoAlt/1000 - tel.MECO_alt_km) / tel.MECO_alt_km * 100) : null;
+  rows.push({ label: "MECO 高度", real: `${tel.MECO_alt_km} km`, mine: simMax.mecoAlt ? `${(simMax.mecoAlt/1000).toFixed(0)} km` : "—", err: errMecoA });
+
+  // Apogee
+  const errApo = simMax.alt && tel.SECO_alt_km ? ((simMax.alt/1000 - tel.SECO_alt_km) / tel.SECO_alt_km * 100) : null;
+  rows.push({ label: "Apogee", real: `${tel.SECO_alt_km} km`, mine: simMax.alt > 100 ? `${(simMax.alt/1000).toFixed(0)} km` : "—", err: errApo });
+
+  // Final Velocity
+  const errFV = simMax.secoV && tel.SECO_vel_ms ? ((simMax.secoV - tel.SECO_vel_ms) / tel.SECO_vel_ms * 100) : null;
+  rows.push({ label: "軌道速度", real: `${tel.SECO_vel_ms} m/s`, mine: simMax.secoV ? `${simMax.secoV.toFixed(0)} m/s` : "—", err: errFV });
+
+  const html = [
+    `<div class="acc-row header"><span>指標</span><span>實測</span><span>本模擬</span><span>誤差</span></div>`,
+    ...rows.map(r =>
+      `<div class="acc-row"><span>${r.label}</span><span class="acc-val">${r.real}</span><span class="acc-val">${r.mine}</span><span class="acc-err ${errorClass(r.err)}">${errorText(r.err)}</span></div>`
+    ),
+  ].join("");
+
+  $t.innerHTML = html;
+
+  // 整體 score
+  const errs = rows.map(r => r.err).filter(e => e !== null && e !== undefined).map(Math.abs);
+  if (errs.length > 0) {
+    const avg = errs.reduce((a, b) => a + b, 0) / errs.length;
+    const score = Math.max(0, 100 - avg);
+    const cls = avg < 10 ? "good" : (avg < 25 ? "ok" : "bad");
+    $("accScore").innerHTML = `<span class="acc-err ${cls}">accuracy: ${score.toFixed(0)}/100</span>`;
+  } else {
+    $("accScore").textContent = "尚未起飛";
+  }
 }
 
 function updateStaticPanels(rocket) {
@@ -157,6 +253,10 @@ function updateDashboard() {
 
   // Timeline
   renderTimeline(r, state);
+
+  // Track sim milestones + update accuracy panel
+  trackSimMilestones(state);
+  renderAccuracy(r);
 }
 
 function tick(now) {

@@ -525,6 +525,44 @@ body {
 }
 .footer a:hover { text-decoration: underline; }
 
+/* ---------- Accuracy panel ---------- */
+.accuracy-panel { border-left: 3px solid var(--success); }
+.accuracy-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85em;
+}
+.acc-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 1fr 50px;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  align-items: center;
+}
+.acc-row.header {
+  font-size: 0.75em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+}
+.acc-val {
+  font-family: var(--font-num);
+  font-size: 0.9em;
+}
+.acc-err {
+  font-family: var(--font-num);
+  font-size: 0.8em;
+  text-align: right;
+  font-weight: 700;
+}
+.acc-err.good { color: var(--success); }
+.acc-err.ok { color: var(--accent-warm); }
+.acc-err.bad { color: var(--danger); }
+.acc-err.pending { color: var(--text-dim); }
+
 /* ---------- Mobile ---------- */
 @media (max-width: 640px) {
   .topbar { flex-direction: column; gap: 12px; align-items: stretch; }
