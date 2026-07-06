@@ -43,9 +43,10 @@ function trackSimMilestones(state) {
     simMax.altT = state.t;
   }
   // 一級 → 二級切換瞬間 = MECO
+  // v5：MECO 用地面相對速度（webcast 遙測基準是地速）
   if (state.stage - 1 > lastStageIdx) {
     if (lastStageIdx === 0) {
-      simMax.mecoV = state.velocity;
+      simMax.mecoV = state.velocity_ground || state.velocity;
       simMax.mecoAlt = state.altitude;
       simMax.mecoT = state.t;
     }

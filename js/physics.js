@@ -272,12 +272,15 @@ class RocketSim {
     this.vx = 0;
     this.vy = 0;
 
-    // 發射緯度（用於 Coriolis 計算）
-    // 我們在 ECEF（地球固定）座標系中工作，vx 從 0 開始
-    // Earth rotation 的「免費東向速度」透過教學卡呈現，不進入本模擬 vx
+    // v5 Tier A：改用「準慣性系（ECI-like）」
+    //   - vx 初始 = 地球自轉切向速度（發射台本來就在動）
+    //   - 大氣同樣隨地球旋轉 → 相對氣流在起飛瞬間 ≈ 0（只剩風）
+    //   - 慣性系中沒有 Coriolis 假力（v3 的 Coriolis 項移除，效應已隱含）
+    // 這修正了 v4 軌道速度 -10% 的主要來源之一
     const lat = ((this.rocket.launchLatitude || 28.5) * Math.PI / 180);
     this.launchLatitudeRad = lat;
-    this.earthRotationBoost = OMEGA_EARTH * R_EARTH * Math.cos(lat);  // m/s，僅顯示用
+    this.earthRotationBoost = OMEGA_EARTH * R_EARTH * Math.cos(lat);  // m/s
+    this.vx = this.earthRotationBoost;
 
     this.stageIdx = 0;
     this.stageTime = 0;
@@ -370,19 +373,45 @@ class RocketSim {
   }
 
   // ============================================================
-  // 節流曲線（Max-Q throttle-down）
+  // 節流曲線
+  // v5：若火箭定義了 throttleBucket（實測擬合的節流時段），優先用它；
+  //      否則 fallback 到 v2 的動壓觸發式自動降油門
   // ============================================================
   computeThrottle(t, dynQ, altitude, burnState) {
     let throttle = Math.min(1, t / 3) * burnState.throttle_max;
-    if (dynQ > 25000 && altitude < 20000) {
+    const bucket = this.rocket.throttleBucket;
+    if (bucket && this.stageIdx === 0 && t >= bucket.start && t <= bucket.end) {
+      throttle *= bucket.level;
+    } else if (!bucket && dynQ > 25000 && altitude < 20000) {
       const excess = Math.min(1, (dynQ - 25000) / 20000);
       throttle *= (1 - 0.3 * excess);
     }
     return throttle;
   }
 
-  // Pitch program（保留 v2 的 T/W 自適應）
+  // v5：pitch table 線性插值（FlightClub 遙測擬合）
+  //   有 table 的火箭用 open-loop 遙測 pitch，其餘 fallback 到 T/W 自適應 exp-decay
+  interpolatePitchTable(t) {
+    const table = this.rocket.pitchTable;
+    if (t <= table[0][0]) return table[0][1];
+    for (let i = 0; i < table.length - 1; i++) {
+      if (t >= table[i][0] && t <= table[i + 1][0]) {
+        const f = (t - table[i][0]) / (table[i + 1][0] - table[i][0]);
+        return table[i][1] + f * (table[i + 1][1] - table[i][1]);
+      }
+    }
+    return table[table.length - 1][1];
+  }
+
+  // Pitch program（v5: table 優先，否則 T/W 自適應）
   computePitchAngle(t, y, vx, vy) {
+    // 高度下墜保護（閉迴路 guard；open-loop table 在質量/推力略偏時的保險）
+    if (this.stageIdx >= 1 && vy < -30 && this.thrust > 0 && y < 250000) {
+      return Math.min(60, this.pitchAngle + 3 * this.dt);
+    }
+    if (this.rocket.pitchTable) {
+      return this.interpolatePitchTable(t);
+    }
     if (t < this.pitchoverInitTime) return 90;
     if (!this.hasPitchedOver && t >= this.pitchoverInitTime) {
       this.hasPitchedOver = true;
@@ -427,8 +456,9 @@ class RocketSim {
 
     // Wind: 東向風速
     const wind_x = windAt(altitude, this.useWind);
-    // 相對氣流速度 = 車輛速度 - 風速
-    const v_rel_x = vx - wind_x;
+    // v5：大氣隨地球共轉。氣流東向速度 = 自轉切向速度 + 風
+    const v_air_x = OMEGA_EARTH * (R_EARTH + altitude) * Math.cos(this.launchLatitudeRad) + wind_x;
+    const v_rel_x = vx - v_air_x;
     const v_rel_y = vy;
     const v_rel_speed = Math.sqrt(v_rel_x * v_rel_x + v_rel_y * v_rel_y);
     const M = a_sound > 0 ? v_rel_speed / a_sound : 0;
@@ -471,26 +501,26 @@ class RocketSim {
     const F_drag_x = v_rel_speed > 0.01 ? -F_drag_mag * (v_rel_x / v_rel_speed) : 0;
     const F_drag_y = v_rel_speed > 0.01 ? -F_drag_mag * (v_rel_y / v_rel_speed) : 0;
 
-    // Gravity vertically down
-    const F_grav_y = -m * g;
+    // Gravity vertically down — v5 關鍵修正：加離心項
+    // 沿地表展開座標系中，水平速度產生離心加速度 vx²/(R+h)，
+    // 到軌道速度 7.9 km/s 時恰好抵消重力 → 這就是「軌道」的物理本質。
+    // 沒有這項，低 T/W 上面級（如 LM5 YF-75D）永遠撐不住高度。
+    const centrifugal = (vx * vx) / (R_EARTH + altitude);
+    const F_grav_y = -m * (g - centrifugal);
 
-    // Coriolis acceleration (only if enabled)
-    let cor_ax = 0, cor_ay = 0;
-    if (this.useCoriolis) {
-      const cor = coriolisAccel(vx, vy, this.launchLatitudeRad);
-      cor_ax = cor.ax;
-      cor_ay = cor.ay;
-    }
+    // v5：慣性系中無 Coriolis 假力（效應已隱含在初始 vx + 共轉大氣中）
+    // 顯示用等效值：若在旋轉系觀察會感受到的 Coriolis 大小
+    const cor_display = 2 * OMEGA_EARTH * Math.abs(vy) * Math.sin(this.launchLatitudeRad);
 
     // Total accelerations
-    const ax = (F_thrust_x + F_drag_x) / m + cor_ax;
-    const ay = (F_thrust_y + F_drag_y + F_grav_y) / m + cor_ay;
+    const ax = (F_thrust_x + F_drag_x) / m;
+    const ay = (F_thrust_y + F_drag_y + F_grav_y) / m;
 
     // 診斷
     this._diag = {
       F_thrust, F_grav_y, F_drag_mag, dynQ, rho, P_amb, T_air,
       M, Cd, throttle, mdot, wind_x, AoA_rad, v_rel_speed,
-      cor_a: Math.sqrt(cor_ax * cor_ax + cor_ay * cor_ay)
+      cor_a: cor_display
     };
 
     return [vx, vy, ax, ay, -mdot];
@@ -643,8 +673,11 @@ class RocketSim {
 
     const alt = Math.max(0, b.y);
     const { P: P_amb, rho } = ussaProps(alt);
-    const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-    const g = gravityAt(alt);
+    // v5：booster 也在慣性系 → 地面相對速度要扣掉共轉大氣速度
+    const v_air_x_b = OMEGA_EARTH * (R_EARTH + alt) * Math.cos(this.launchLatitudeRad);
+    const rel_vx = b.vx - v_air_x_b;
+    const speed = Math.sqrt(rel_vx * rel_vx + b.vy * b.vy);   // 氣流相對速度（drag/落地判定用）
+    const g = gravityAt(alt) - (b.vx * b.vx) / (R_EARTH + alt);   // 含離心項
 
     // Merlin 1D thrust (single engine, ~845 kN SL) × 3 in entry, × 1 in landing
     const F_MERLIN = 845e3;
@@ -655,8 +688,8 @@ class RocketSim {
     const A_cross = Math.PI * Math.pow(this.rocket.diameter / 2, 2);
     let Cd_booster = 0.8;    // Booster falling isn't streamlined; grid fins ~0.8-1.2
 
-    // Direction of thrust: mostly retrograde (against velocity)
-    const vel_angle = speed > 5 ? Math.atan2(b.vy, b.vx) : Math.PI/2;
+    // Direction of thrust: retrograde vs 氣流相對速度
+    const vel_angle = speed > 5 ? Math.atan2(b.vy, rel_vx) : Math.PI/2;
     const retrograde = vel_angle + Math.PI;
 
     if (b.phase === "FLIP") {
@@ -684,7 +717,7 @@ class RocketSim {
       if (alt <= 0 || speed < 5) {
         b.phase = "LANDED";
         b.vy = 0;
-        b.vx = 0;
+        b.vx = v_air_x_b;   // 落地 = 與地面共轉（慣性系中仍有自轉速度）
         b.y = 0;
         b.events.push({t: b.t, name: "Touchdown"});
         return;
@@ -698,10 +731,10 @@ class RocketSim {
     const mdot = thrust > 0 ? thrust / (ISP * G0) : 0;
     b.mass = Math.max(1000, b.mass - mdot * dt);
 
-    // Drag
+    // Drag（用氣流相對速度）
     const dynQ = 0.5 * rho * speed * speed;
     const F_drag = dynQ * Cd_booster * A_cross;
-    const F_drag_x = speed > 0.01 ? -F_drag * (b.vx / speed) : 0;
+    const F_drag_x = speed > 0.01 ? -F_drag * (rel_vx / speed) : 0;
     const F_drag_y = speed > 0.01 ? -F_drag * (b.vy / speed) : 0;
 
     const F_grav_y = -b.mass * g;
@@ -724,10 +757,14 @@ class RocketSim {
     const s = this.currentStage();
     const propMax = s.mass_wet - s.mass_dry;
     const fuelPct = propMax > 0 ? (this.currentPropellant / propMax) * 100 : 0;
+    // v5：地面相對速度（webcast/MECO 遙測用地速；SECO 軌道速度用慣性速度）
+    const v_ground_x = this.vx - this.earthRotationBoost;
+    const velocity_ground = Math.sqrt(v_ground_x * v_ground_x + this.vy * this.vy);
     return {
       t: this.t,
       altitude: this.altitude,
       velocity: this.speed,
+      velocity_ground: velocity_ground,
       velocity_v: this.velocity_v,
       velocity_h: this.velocity_h,
       mach: this.mach,

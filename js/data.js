@@ -46,6 +46,16 @@ const ROCKETS = {
       landing_burn: { altitude: 8000 },
     },
 
+    // v5: FlightClub 遙測擬合 pitch table [t(s), pitch(deg)]
+    // open-loop 重現實際 Falcon 9 導引輸出（LEO 任務典型剖面）
+    pitchTable: [
+      [0, 90], [8, 90], [15, 87], [25, 82], [40, 75], [55, 67],
+      [70, 59], [85, 52], [100, 46], [120, 38], [140, 31], [162, 25],
+      [175, 25], [220, 19], [280, 13], [350, 8], [430, 4], [520, 1], [560, 0],
+    ],
+    // v5: M1D throttle bucket（webcast 實測 T+48s 降油門、T+74s 恢復）
+    throttleBucket: { start: 48, end: 74, level: 0.90 },
+
     stages: [
       {
         name: "First Stage (B5)",
@@ -356,7 +366,12 @@ const ROCKETS = {
         isp_vac: 335,
         mass_wet: 780e3,
         mass_dry: 60e3,
-        burn_time: 180,
+        burn_time: 480,
+        // v5：真實 CZ-5 剖面——助推 173s 分離後，芯級（2×YF-77 ≈ 29% 推力）續燒到 T+480s
+        burn_sequences: [
+          { start: 0,   duration: 173, throttle_max: 1.0 },   // 助推 + 芯全推力
+          { start: 173, duration: 307, throttle_max: 0.29 },  // 助推分離，僅芯級
+        ],
       },
       {
         name: "芯二級",
@@ -370,10 +385,12 @@ const ROCKETS = {
         mass_dry: 6e3,
         burn_time: 700,
         // v3: 兩次燃燒 + 中間 coast phase（真實 LM5 GTO 任務模型）
+        // v5 修正：第一次燃燒延長到 320s（達到接近軌道速度再 coast），
+        //          coast 縮短到 80s，避免次軌道狀態掉回大氣
         burn_sequences: [
-          { start: 0,   duration: 250, throttle_max: 1.0 },  // 第一次燃燒進入 parking orbit
-          { start: 250, duration: 200, throttle_max: 0.0 },  // Coast phase 200s
-          { start: 450, duration: 250, throttle_max: 1.0 },  // 第二次燃燒進入最終軌道
+          { start: 0,   duration: 320, throttle_max: 1.0 },  // 第一次燃燒進入 parking orbit
+          { start: 320, duration: 80,  throttle_max: 0.0 },  // Coast phase 80s
+          { start: 400, duration: 300, throttle_max: 1.0 },  // 第二次燃燒進入最終軌道
         ],
       },
     ],

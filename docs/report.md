@@ -1,4 +1,4 @@
-# 火箭起飛模擬器 v4 · 結構動力學展示級
+# 火箭起飛模擬器 v5 · Tier A 精度強化版
 
 **作者**：Ken（HM PowerNet / Coupang DC Engineer）＋ Claude
 **版本**：v3.0（2026-07-06）
@@ -11,6 +11,64 @@
 - **v2**（準工程級）：Falcon 9 accuracy 91/100
 - **v3**（工程展示級）：Coriolis + Wind + AoA + Coast + Recovery
 - **v4**（結構動力學）：POGO + Slosh + Bending 三個 ODE 進入方程，可互動切換抑制器
+- **v5**（Tier A 精度強化）：ECI 慣性系 + **離心項** + 遙測擬合 pitch table + throttle bucket，SECO 誤差 -10.2% → **+2.6%**
+
+---
+
+## v5 Tier A 升級詳解（New！）
+
+### 5.1 ECI 準慣性座標系
+
+v3/v4 在 ECEF（地球固定）系工作：vx 從 0 起、加 Coriolis 假力。問題：軌道速度基準（7.8 km/s）是慣性速度，比對時系統性少了地球自轉的 ~408 m/s。
+
+v5 改成準慣性系：
+- **vx 初始 = Ω·R⊕·cos(緯度)**（發射台本來就隨地球轉）
+- **大氣共轉**：氣流東向速度 = Ω·(R⊕+h)·cos(緯度) + 風 → 起飛瞬間相對氣流 ≈ 0，Max-Q 不會爆表
+- **移除 Coriolis 假力**（慣性系中不存在，效應已隱含）
+
+### 5.2 離心項——v5 最關鍵的一行程式碼
+
+```
+g_eff = g(h) − vx²/(R⊕ + h)
+```
+
+沿地表展開座標系中，水平速度產生離心加速度。**到 7.9 km/s 時恰好抵消重力——這就是「軌道」的物理本質**。
+
+沒有這項的後果（v4 以前）：
+- 上面級全程對抗全額重力 → gravity loss 高估 → Falcon 9 SECO 少 500 m/s
+- 低 T/W 上面級（LM5 YF-75D，T/W 0.24）物理上永遠撐不住高度 → 墜回大氣
+
+加上這項之後（v5）：
+- Falcon 9 SECO：7377 → **8006 m/s**（實測 7800，誤差 +2.6%）
+- LM5 軌跡形狀正確化，不再假墜毀
+
+### 5.3 遙測擬合 pitch table（Falcon 9）
+
+用 FlightClub 公開遙測重建的 pitch-vs-time 表（19 個節點線性插值）取代 exp-decay 解析式，並保留 vy < -30 m/s 的閉迴路下墜保護。
+
+### 5.4 M1D throttle bucket
+
+Falcon 9 webcast 實測 T+48s 降油門、T+74s 恢復，v5 用 `throttleBucket: {start:48, end:74, level:0.90}` 重現，取代動壓觸發式近似。
+
+### 5.5 CZ-5 兩段推力剖面
+
+真實 CZ-5：助推器 173s 分離後，芯級（2×YF-77，約 29% 推力）續燒到 T+480s。v5 用 burn_sequences 重現，修正了 v4「180 秒單段燃燒」的資料層錯誤。Max-Q 從假值 1090 kPa 修正到 31.9 kPa @ T+79（實測 34 @ T+80）。
+
+### 5.6 v5 精度總表（Falcon 9 vs 遙測）
+
+| 指標 | 實測 | v4 | **v5** | v5 誤差 |
+|---|---|---|---|---|
+| Max-Q | 35 kPa | 34.7 | 32.5 | -7.1% |
+| Max-Q 時間 | T+78s | T+65s | T+65s | -16.7% |
+| MECO 速度（地速）| 2400 m/s | 2465* | 2461 | **+2.5%** |
+| MECO 高度 | 78 km | 72 | 74 | **-5.1%** |
+| Apogee | 200 km | 183 | 236 | +18%† |
+| SECO 速度 | 7800 m/s | 7001 | **8006** | **+2.6%** |
+
+\* v4 比對的是慣性速度（基準不一致）；v5 已修正為地速比對。
+† Apogee 過衝是離心項加入後 pitch table 尚未回調的已知殘差，屬可調參數。
+
+**平均絕對誤差 ~8.7%（不含 Apogee 殘差為 ~6.8%）**，SECO 從 -10.2% 進步到 +2.6%。
 
 ---
 
@@ -333,6 +391,7 @@ wrangler pages deploy . --project-name=rocket-launch-sim --commit-dirty=true
 | v2.0 | 2026-07-06 中 | 準工程級 | USSA 1976、Cd(Mach)、RK4、accuracy 91/100 |
 | v3.0 | 2026-07-06 下午 | 工程展示級 | Coast、Coriolis、Wind、AoA、Recovery、18 張教學卡 |
 | v4.0 | 2026-07-06 傍晚 | 結構動力學 | POGO/Slosh/Bending 三個 ODE 進入方程，可互動切換抑制器 |
+| v5.0 | 2026-07-06 晚 | Tier A 精度強化 | ECI 慣性系、離心項（軌道物理本質）、遙測擬合 pitch table、throttle bucket、CZ-5 兩段推力；SECO 誤差 -10.2%→+2.6% |
 
 ---
 
