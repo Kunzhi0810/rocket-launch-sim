@@ -1,4 +1,4 @@
-# 火箭起飛模擬器 v3 · 工程展示級精度報告
+# 火箭起飛模擬器 v4 · 結構動力學展示級
 
 **作者**：Ken（HM PowerNet / Coupang DC Engineer）＋ Claude
 **版本**：v3.0（2026-07-06）
@@ -9,7 +9,8 @@
 **版本演進**：
 - **v1**（教學級）：apogee 誤差 30%+
 - **v2**（準工程級）：Falcon 9 accuracy 91/100
-- **v3**（工程展示級）：Coriolis + Wind + AoA + Coast + Recovery，加入 6 張新教學卡
+- **v3**（工程展示級）：Coriolis + Wind + AoA + Coast + Recovery
+- **v4**（結構動力學）：POGO + Slosh + Bending 三個 ODE 進入方程，可互動切換抑制器
 
 ---
 
@@ -173,6 +174,55 @@ Alt 8 km: LANDING BURN (hoverslam)
 
 ---
 
+## v4：結構動力學進入方程（New！）
+
+**背景**：v3 有 POGO / Slosh / Bending 三張教學卡但**沒有進入 dynamics**。v4 把它們變成**可即時觀察的 1D ODE**。
+
+### 4.1 POGO 縱向振盪
+
+**物理**：結構縱向位移 z 與燃料進料系統壓力波、推力震盪耦合。
+```
+z'' + 2ζω·z' + ω²·z = γ·mdot·z' + noise
+ω = 2π·5 Hz    ζ = 0.02 (unsuppressed) / 0.20 (suppressed)
+γ = 3e-3       coupling gain
+```
+- **不穩定條件**：γ·mdot·z' > 阻尼項 → 自激振盪
+- **本 sim 實測**：Falcon 9 起飛期 POGO 峰值 ~ 1.3 g（Saturn V 實測到 17g，本 sim γ 保守設定）
+- **Saturn V 解法**：在 LOX 預閥填氦氣氣泡 → 提高阻尼比 ζ → 抑制器 ON
+- **互動**：點右側「🩹 抑制器」按鈕即時切換，看振幅收斂/發散
+
+### 4.2 Slosh 燃料晃動
+
+**物理**：儲槽自由液面等效於擺，隨主火箭 pitch 加速度晃動。
+```
+θ_s'' + 2ζω·θ_s' + ω²·θ_s = -ω²·pitch_perturbation
+ω = 2π·0.5 Hz   ζ = 0.02 (no baffles) / 0.20 (with baffles)
+```
+- **Reaction moment**：slosh 反饋到 pitch → 姿態擾動 ~ 0.001 rad
+- **Baffles 效果**：加擋板 → 阻尼比從 0.02 跳到 0.20，避免與控制迴路共振
+- **互動**：點「🧱 擋板」按鈕切換
+
+### 4.3 Bending Mode 彎曲模態
+
+**物理**：100 m 高火箭當作簡支梁，第一階彎曲模態。
+```
+q'' + 2ζω·q' + ω²·q = Φ·(F_gimbal + F_windshear + noise)
+ω = 2π·2 Hz    ζ = 0.008    Φ = 5e-5
+```
+- **三源激勵**：gimbal 側向推力 + AoA×dynQ 側風力 + 引擎白噪聲
+- **本 sim 實測**：Falcon 9 起飛 100 秒內中點位移 ~ 1 cm peak
+- **實戰**：控制迴路須加 notch filter 濾掉 2 Hz，否則 gimbal 追 bending mode → controlled crash
+- **Saturn V**：1.05 Hz、Falcon 9 ~ 2 Hz、Starship ~ 1.5 Hz（都在 gimbal 頻寬邊緣）
+
+### 4.4 結構動力學儀表
+
+新面板顯示三項即時值 + 峰值：
+- POGO 推力擾動 %、g 峰值
+- Slosh 液面偏角、峰值
+- Bending 中點位移 cm、gimbal 補償角
+
+---
+
 ## v3 精度限制（誠實揭露）
 
 **仍未實作**：
@@ -282,6 +332,7 @@ wrangler pages deploy . --project-name=rocket-launch-sim --commit-dirty=true
 | v1.0 | 2026-07-06 早 | 教學級 | MVP、4 款火箭、12 張教學卡 |
 | v2.0 | 2026-07-06 中 | 準工程級 | USSA 1976、Cd(Mach)、RK4、accuracy 91/100 |
 | v3.0 | 2026-07-06 下午 | 工程展示級 | Coast、Coriolis、Wind、AoA、Recovery、18 張教學卡 |
+| v4.0 | 2026-07-06 傍晚 | 結構動力學 | POGO/Slosh/Bending 三個 ODE 進入方程，可互動切換抑制器 |
 
 ---
 

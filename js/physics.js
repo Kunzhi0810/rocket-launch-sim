@@ -165,7 +165,93 @@ function coriolisAccel(vx, vy, latitude_rad) {
 
 
 // ============================================================
-// RocketSim v3 class
+// v4: 結構動力學（POGO / Slosh / Bending mode）
+// 每個都是簡化 1D 諧振子 ODE，用 Euler 積分
+// 這些是「附加擾動」不進入主 RK4 state
+// ============================================================
+
+class PogoDynamics {
+  /**
+   * POGO：結構縱向位移 z 與推力震盪耦合
+   *   m·z'' + c·z' + k·z = γ·mdot·z'
+   * 目標：不穩定時形成 5 Hz 自激振盪，穩定化後衰減。
+   */
+  constructor(freq_hz = 5, damping = 0.02, coupling = 0.003) {
+    this.omega = 2 * Math.PI * freq_hz;
+    this.zeta = damping;
+    this.gamma = coupling;
+    this.z = 0;
+    this.dz = 0;
+    this.suppressed = false;
+  }
+  step(dt, mdot, thrust) {
+    if (thrust < 1) { this.z *= 0.98; this.dz *= 0.98; return 0; }
+    // Noise 強度更大，模擬引擎不均勻燃燒
+    const noise = (Math.random() - 0.5) * 2.0;
+    const zeta_eff = this.suppressed ? 0.20 : this.zeta;
+    // POGO 不穩定：mdot 越大耦合越強 → 大火箭更容易 POGO
+    const forcing = this.suppressed ? 0 : this.gamma * (mdot / 1000) * this.dz;
+    const ddz = -2 * zeta_eff * this.omega * this.dz - this.omega * this.omega * this.z + forcing + noise;
+    this.dz += ddz * dt;
+    this.z += this.dz * dt;
+    if (Math.abs(this.z) > 3) { this.z = Math.sign(this.z) * 3; this.dz *= 0.5; }
+    return this.z * 0.05;    // z=1m → 5% 推力擾動
+  }
+  amplitude_g(mass) {
+    return Math.abs(this.dz * this.omega) / G0;
+  }
+}
+
+class SloshDynamics {
+  /**
+   * Slosh：燃料自由液面等效擺
+   *   θ_s'' + 2ζω·θ_s' + ω²·θ_s = -ω²·pitch_deviation
+   */
+  constructor(freq_hz = 0.5, damping = 0.02) {
+    this.omega = 2 * Math.PI * freq_hz;
+    this.zeta = damping;
+    this.theta = 0;
+    this.dtheta = 0;
+    this.baffled = false;     // 加擋板 → 阻尼上升
+  }
+  step(dt, pitch_rad_perturbation) {
+    const zeta_eff = this.baffled ? 0.20 : this.zeta;
+    // Forcing = 主火箭 pitch 擾動的鏡像
+    const forcing = -this.omega * this.omega * pitch_rad_perturbation;
+    const ddtheta = -2 * zeta_eff * this.omega * this.dtheta - this.omega * this.omega * this.theta + forcing;
+    this.dtheta += ddtheta * dt;
+    this.theta += this.dtheta * dt;
+    // 反作用力矩對火箭 pitch 的擾動
+    return -this.theta * 0.001;  // 傳回給 pitch angle 修正量（rad）
+  }
+}
+
+class BendingMode {
+  constructor(freq_hz = 2, damping = 0.008) {
+    this.omega = 2 * Math.PI * freq_hz;
+    this.zeta = damping;
+    this.q = 0;
+    this.dq = 0;
+    this.phi = 5e-5;    // 大幅增強看得到效果
+  }
+  step(dt, thrust, gimbal_rad, aoa_rad, dynQ, area) {
+    if (thrust < 1 && Math.abs(dynQ) < 100) { this.q *= 0.995; this.dq *= 0.995; return this.q; }
+    // 三個激勵源：gimbal 側向力 + AoA·dynQ 側風力 + 引擎白噪聲
+    const F_gimbal = thrust * Math.sin(gimbal_rad || 0);
+    const F_windshear = (aoa_rad || 0) * (dynQ || 0) * (area || 10);
+    const noise = (Math.random() - 0.5) * thrust * 5e-5;
+    const forcing = this.phi * (F_gimbal + F_windshear + noise);
+    const ddq = -2 * this.zeta * this.omega * this.dq - this.omega * this.omega * this.q + forcing;
+    this.dq += ddq * dt;
+    this.q += this.dq * dt;
+    if (Math.abs(this.q) > 1) { this.q = Math.sign(this.q) * 1; this.dq *= 0.5; }
+    return this.q;
+  }
+}
+
+
+// ============================================================
+// RocketSim v4 class
 // ============================================================
 class RocketSim {
   constructor(rocket) {
@@ -236,6 +322,19 @@ class RocketSim {
     this.status = "PRELAUNCH";
     this.maxDynQ = 0;
     this.maxDynQTime = 0;
+
+    // v4: 結構動力學
+    this.pogo = new PogoDynamics(5, 0.03, 0.0002);
+    this.slosh = new SloshDynamics(0.5, 0.02);
+    this.bending = new BendingMode(2, 0.01);
+    this.gimbal_rad = 0;
+    this.pogo_perturbation_pct = 0;
+    this.slosh_correction_rad = 0;
+    this.bending_deflection_m = 0;
+    // 累積最大值統計
+    this.maxPogoG = 0;
+    this.maxSloshDeg = 0;
+    this.maxBendingCm = 0;
   }
 
   calcInitialMass() {
@@ -461,6 +560,29 @@ class RocketSim {
       this.maxDynQTime = this.t;
     }
 
+    // v4: 步進結構動力學
+    // POGO — 質量流率影響推力震盪
+    const mdot_now = d.mdot || 0;
+    this.pogo_perturbation_pct = this.pogo.step(this.dt, mdot_now, this.thrust);
+    const pogo_g = this.pogo.amplitude_g(this.totalMass);
+    if (pogo_g > this.maxPogoG) this.maxPogoG = pogo_g;
+
+    // Slosh — 主 pitch 加速度作為擾動源
+    const pitch_rad = this.pitchAngle * Math.PI / 180;
+    this.slosh_correction_rad = this.slosh.step(this.dt, pitch_rad * 0.001);
+    const slosh_deg = Math.abs(this.slosh.theta * 180 / Math.PI);
+    if (slosh_deg > this.maxSloshDeg) this.maxSloshDeg = slosh_deg;
+
+    // Bending — 三源激勵：gimbal + AoA·dynQ + 白噪聲
+    this.gimbal_rad = -this.slosh_correction_rad * 0.5;
+    const A_cross_bend = Math.PI * Math.pow(this.rocket.diameter / 2, 2);
+    this.bending_deflection_m = this.bending.step(
+      this.dt, this.thrust, this.gimbal_rad,
+      (d.AoA_rad || 0), this.dynamicPressure, A_cross_bend
+    );
+    const bend_cm = Math.abs(this.bending_deflection_m * 100);
+    if (bend_cm > this.maxBendingCm) this.maxBendingCm = bend_cm;
+
     // 階段分離：用 totalStageTime 支援 coast phase
     const totalT = this.totalStageTime(s);
     if (this.stageTime >= totalT || this.currentPropellant <= 0.001) {
@@ -634,8 +756,23 @@ class RocketSim {
       AoA_deg: this.AoA_deg,
       coriolis_a: this.coriolis_a,
       booster: this.booster,
+      // v4 結構動力學狀態
+      pogo_pct: this.pogo_perturbation_pct * 100,   // 推力擾動 %
+      pogo_g: this.pogo.amplitude_g(this.totalMass),
+      pogo_suppressed: this.pogo.suppressed,
+      slosh_deg: this.slosh.theta * 180 / Math.PI,
+      slosh_baffled: this.slosh.baffled,
+      bending_cm: this.bending.q * 100,
+      gimbal_deg: this.gimbal_rad * 180 / Math.PI,
+      maxPogoG: this.maxPogoG,
+      maxSloshDeg: this.maxSloshDeg,
+      maxBendingCm: this.maxBendingCm,
     };
   }
+
+  // v4: 切換 POGO 抑制器（教學展示用）
+  togglePogoSuppressor() { this.pogo.suppressed = !this.pogo.suppressed; }
+  toggleSloshBaffles() { this.slosh.baffled = !this.slosh.baffled; }
 
   launch() {
     if (this.status === "PRELAUNCH") this.status = "ASCENT";

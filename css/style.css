@@ -525,6 +525,59 @@ body {
 }
 .footer a:hover { text-decoration: underline; }
 
+/* ---------- v4 結構動力學 ---------- */
+.struct-panel { border-left: 3px solid var(--accent-warm); }
+.struct-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.struct-item {
+  background: rgba(5, 9, 21, 0.5);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.struct-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.struct-label { font-size: 0.85em; font-weight: 700; color: var(--text); }
+.struct-freq { font-size: 0.75em; color: var(--text-dim); font-family: var(--font-num); }
+.struct-val { font-family: var(--font-num); font-size: 0.85em; color: var(--text); margin: 4px 0; }
+.struct-val small { color: var(--text-dim); font-size: 0.8em; }
+.struct-bar-wrap {
+  background: rgba(255, 255, 255, 0.08);
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.struct-bar { height: 100%; transition: width 0.15s; width: 0; }
+.struct-bar.pogo { background: var(--danger); }
+.struct-bar.slosh { background: var(--accent-warm); }
+.struct-bar.bend { background: var(--accent); }
+.struct-note { font-size: 0.72em; color: var(--text-dim); margin-top: 4px; }
+.mini-btn {
+  background: var(--bg-2);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 0.7em;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.mini-btn[data-active="true"] {
+  background: var(--success);
+  color: var(--bg-0);
+  border-color: var(--success);
+  font-weight: 700;
+}
+.mini-btn:hover { border-color: var(--accent); }
+
 /* ---------- v3 環境 & 回收 ---------- */
 .env-grid {
   display: grid;

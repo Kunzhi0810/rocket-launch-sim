@@ -96,6 +96,50 @@
       <div class="mini-note">實測數據來源：SpaceX 官方 press kit、NASA Space Launch Report、FlightClub.io telemetry reconstruction。誤差 < 15% 視為教學可接受。</div>
     </div>
 
+    <!-- v4 新增：結構動力學 -->
+    <div class="panel struct-panel">
+      <h2>🔩 結構動力學 <span class="tag">v4</span></h2>
+      <div class="struct-grid">
+        <div class="struct-item">
+          <div class="struct-header">
+            <span class="struct-label">POGO 縱向振盪</span>
+            <button class="mini-btn" id="btnPogo" data-active="false">🩹 抑制器 OFF</button>
+          </div>
+          <div class="struct-val">
+            <span id="pogoPct">0.00</span> <small>%</small> 推力擾動 ·
+            <span id="pogoG">0.00</span> <small>g</small> 峰值
+          </div>
+          <div class="struct-bar-wrap"><div class="struct-bar pogo" id="pogoBar" style="width:0%"></div></div>
+          <div class="struct-note">5 Hz 諧振子；抑制器 = Saturn V 氦氣填充解法</div>
+        </div>
+        <div class="struct-item">
+          <div class="struct-header">
+            <span class="struct-label">Slosh 燃料晃動</span>
+            <button class="mini-btn" id="btnSlosh" data-active="false">🧱 擋板 OFF</button>
+          </div>
+          <div class="struct-val">
+            <span id="sloshDeg">0.00</span><small>°</small> 液面 ·
+            <span id="sloshMax">0.00</span><small>°</small> 峰值
+          </div>
+          <div class="struct-bar-wrap"><div class="struct-bar slosh" id="sloshBar" style="width:0%"></div></div>
+          <div class="struct-note">0.5 Hz 等效擺；擋板 = 增大阻尼比 0.02→0.20</div>
+        </div>
+        <div class="struct-item">
+          <div class="struct-header">
+            <span class="struct-label">Bending 彎曲模態</span>
+            <span class="struct-freq">2 Hz</span>
+          </div>
+          <div class="struct-val">
+            <span id="bendCm">0.0</span> <small>cm</small> 中點位移 ·
+            <span id="gimbalDeg">0.00</span><small>°</small> gimbal 補償
+          </div>
+          <div class="struct-bar-wrap"><div class="struct-bar bend" id="bendBar" style="width:0%"></div></div>
+          <div class="struct-note">第一階模態；notch filter 濾除 2 Hz 才不失控</div>
+        </div>
+      </div>
+      <div class="mini-note">全部 3 個結構動力學都是 1D 諧振子 ODE 加入方程；打開/關閉抑制器可即時看到效果差異</div>
+    </div>
+
     <!-- v3 新增：物理環境擾動 -->
     <div class="panel">
       <h2>🌪 環境擾動 <span class="tag">v3</span></h2>

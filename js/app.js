@@ -260,6 +260,21 @@ function updateDashboard() {
   $("envCor").textContent = state.coriolis_a ? state.coriolis_a.toFixed(3) : "0.000";
   $("envBoost").textContent = sim.earthRotationBoost ? sim.earthRotationBoost.toFixed(0) : "0";
 
+  // v4: 結構動力學
+  const pogo_pct = Math.abs(state.pogo_pct || 0);
+  const pogo_g = state.pogo_g || 0;
+  $("pogoPct").textContent = pogo_pct.toFixed(2);
+  $("pogoG").textContent = (state.maxPogoG || 0).toFixed(2);
+  $("pogoBar").style.width = Math.min(100, pogo_pct * 10) + "%";
+  const slosh_abs = Math.abs(state.slosh_deg || 0);
+  $("sloshDeg").textContent = slosh_abs.toFixed(2);
+  $("sloshMax").textContent = (state.maxSloshDeg || 0).toFixed(2);
+  $("sloshBar").style.width = Math.min(100, slosh_abs * 20) + "%";
+  const bend_abs = Math.abs(state.bending_cm || 0);
+  $("bendCm").textContent = bend_abs.toFixed(1);
+  $("gimbalDeg").textContent = (state.gimbal_deg || 0).toFixed(2);
+  $("bendBar").style.width = Math.min(100, bend_abs * 5) + "%";
+
   // v3: booster 面板（Falcon 9 專屬）
   const boosterPanel = $("boosterPanel");
   if (state.booster) {
@@ -340,6 +355,19 @@ function bindEvents() {
   $("timeScale").addEventListener("input", e => {
     timeScale = parseInt(e.target.value);
     $("timeScaleLbl").textContent = timeScale;
+  });
+  // v4: 結構抑制器切換
+  $("btnPogo").addEventListener("click", () => {
+    sim.togglePogoSuppressor();
+    const on = sim.pogo.suppressed;
+    $("btnPogo").dataset.active = on ? "true" : "false";
+    $("btnPogo").textContent = on ? "✅ 抑制器 ON" : "🩹 抑制器 OFF";
+  });
+  $("btnSlosh").addEventListener("click", () => {
+    sim.toggleSloshBaffles();
+    const on = sim.slosh.baffled;
+    $("btnSlosh").dataset.active = on ? "true" : "false";
+    $("btnSlosh").textContent = on ? "✅ 擋板 ON" : "🧱 擋板 OFF";
   });
 }
 
