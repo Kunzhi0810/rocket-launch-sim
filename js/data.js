@@ -36,6 +36,15 @@ const ROCKETS = {
     totalMass: 549054,    // kg (fully fueled)
     Cd: 0.5,              // 粗略平均氣動阻力係數
     launchSite: "Cape Canaveral / Vandenberg",
+    launchLatitude: 28.5, // deg，Cape Canaveral
+
+    // v3: 回收設定（Falcon 9 特有）
+    recovery: {
+      type: "propulsive",
+      boostback: { start_after_meco: 5, duration: 30 },
+      entry_burn: { altitude: 70000, end_altitude: 40000 },
+      landing_burn: { altitude: 8000 },
+    },
 
     stages: [
       {
@@ -132,6 +141,7 @@ const ROCKETS = {
     totalMass: 5000e3,      // kg（含推進劑 4600 t + 兩級乾重）
     Cd: 0.45,
     launchSite: "Starbase, TX",
+    launchLatitude: 26.0,   // deg，Boca Chica
 
     stages: [
       {
@@ -225,6 +235,7 @@ const ROCKETS = {
     totalMass: 2970e3,
     Cd: 0.6,
     launchSite: "Kennedy Space Center LC-39",
+    launchLatitude: 28.6,   // deg
 
     stages: [
       {
@@ -332,6 +343,7 @@ const ROCKETS = {
     totalMass: 869e3,
     Cd: 0.55,
     launchSite: "文昌 (Wenchang)",
+    launchLatitude: 19.6,   // deg，文昌
 
     stages: [
       {
@@ -357,6 +369,12 @@ const ROCKETS = {
         mass_wet: 55e3,
         mass_dry: 6e3,
         burn_time: 700,
+        // v3: 兩次燃燒 + 中間 coast phase（真實 LM5 GTO 任務模型）
+        burn_sequences: [
+          { start: 0,   duration: 250, throttle_max: 1.0 },  // 第一次燃燒進入 parking orbit
+          { start: 250, duration: 200, throttle_max: 0.0 },  // Coast phase 200s
+          { start: 450, duration: 250, throttle_max: 1.0 },  // 第二次燃燒進入最終軌道
+        ],
       },
     ],
 

@@ -168,6 +168,89 @@ const FIRST_PRINCIPLES_CARDS = [
     `,
   },
 
+  // v3 新增：結構動力學挑戰
+  {
+    id: "pogo",
+    condition: s => s.t > 40 && s.t < 120 && s.dynQ > 5000,
+    title: "POGO 振盪：Saturn V 差點失敗的原因",
+    body: `
+      <strong>POGO</strong> = 縱向自激振盪，5-60 Hz。
+      當<strong>結構共振頻率</strong>與<strong>燃料進料系統壓力波</strong>耦合 →
+      推力震盪 → 結構震盪 → 進料震盪 → 惡性回饋。
+      <br>Saturn V S-IC 曾出現 <strong>17g 振幅</strong>在酬載處！
+      NASA 解法：**在 LOX 進料閥填充氦氣氣泡**當震動阻尼器。
+      <br>沒有這個工程解，Apollo 11 可能失敗。這是<strong>「結構＋流體＋控制耦合」的教科書案例</strong>。
+    `,
+  },
+
+  {
+    id: "slosh",
+    condition: s => s.stage >= 2 && s.altitude > 80000,
+    title: "燃料晃動（Slosh）",
+    body: `
+      推進劑在半空儲槽裡的<strong>自由液面</strong>會隨姿態變化擺動。
+      問題：晃動頻率若與<strong>控制系統頻寬</strong>或<strong>彎曲模態頻率</strong>重疊 → 姿態失控。
+      <br>解法：儲槽內裝<strong>環形擋板（baffles）</strong>將流體分艙，讓晃動頻率遠離危險區。
+      <br>代價：質量與成本上升。這是<strong>「性能 vs 安全」的物理妥協</strong>——所有火箭都要面對。
+    `,
+  },
+
+  {
+    id: "bending",
+    condition: s => s.t > 60 && s.altitude > 20000,
+    title: "彎曲模態（Bending Mode）",
+    body: `
+      100 米高的火箭本質上是<strong>細長彈性梁</strong>，會像釣魚竿一樣彎。
+      **第一階彎曲模態**通常 1-5 Hz，若與 gimbal 控制頻率交疊 → 「controlled crash」。
+      <br>解法：<strong>Notch filter</strong> 在控制迴路濾掉彎曲頻率。
+      <br>Saturn V 第一階 bending mode = 1.05 Hz，Falcon 9 大約 2 Hz。
+      這是「<strong>結構動力學 × 控制理論</strong>」交界，也是火箭工程最玄的一環。
+    `,
+  },
+
+  {
+    id: "coriolis",
+    condition: s => s.t > 100 && s.altitude > 40000,
+    title: "Coriolis 力：不是幻覺",
+    body: `
+      在地球自轉的**旋轉座標系**中觀察，會出現額外的「Coriolis 加速度」：
+      <span class="fp-eq">a<sub>c</sub> = -2·Ω × v</span>
+      這不是真力，是**慣性效應的表象**。但對火箭導引至關重要：
+      不同<strong>發射緯度</strong>會給你不同的「免費」東向速度：
+      <br>- 赤道發射：+ 465 m/s（法屬蓋亞那 Kourou）
+      <br>- 佛州 28.5°N：+ 408 m/s
+      <br>- 拜科努爾 46°N：+ 323 m/s
+      <br>SpaceX 選 Cape Canaveral 就是為了這 408 m/s 免費速度。
+    `,
+  },
+
+  {
+    id: "wind",
+    condition: s => s.altitude > 8000 && s.altitude < 15000,
+    title: "上層風：Max-Q 附近的隱形殺手",
+    body: `
+      對流層頂（10-12 km）有<strong>jet stream</strong>，風速可達 40-60 m/s。
+      在 Max-Q 附近遇到強風 → <strong>迎角 AoA 突增</strong> → 側向氣動力 → 結構加額外應力。
+      <br>SpaceX 每次發射前會用氣象氣球實測風場，計算「wind loads」是否超限。
+      Challenger 事故的部分原因就是<strong>異常上層 wind shear</strong>加劇 O-ring 洩漏。
+      <br>本模擬器已加入 HWM-inspired 簡化風場，你可以看到 Max-Q 高度附近火箭 AoA 微幅擾動。
+    `,
+  },
+
+  {
+    id: "recovery",
+    condition: s => s.stage >= 2 && s.booster && s.booster.phase && s.booster.phase !== "FLIP",
+    title: "Falcon 9 三段回收：燒兩次、掉兩次",
+    body: `
+      Booster 分離後不是自由落體，而是**精心編排的三段點火**：
+      <br>1. <strong>Flip</strong>：冷氣推進器 180° 翻轉
+      <br>2. <strong>Boostback burn</strong>：3 顆 Merlin 反推減速（RTLS 任務用）
+      <br>3. <strong>Entry burn</strong>：70km 高空點 3 顆減速穿越大氣（防燒毀）
+      <br>4. <strong>Landing burn</strong>：8km 高度點 1 顆做「hoverslam」——沒油門到 0 空間，計算精確到秒
+      <br>SpaceX 已回收 598+ 次，是<strong>第一性原理應用最完整的工程實例</strong>。
+    `,
+  },
+
 ];
 
 

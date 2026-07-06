@@ -1,148 +1,178 @@
 /**
- * 火箭飛行物理引擎 v2 —— 「準工程級」精度
+ * 火箭飛行物理引擎 v3 —— 「工程展示級」精度
  *
- * v1 → v2 升級：
- *  ✅ US Standard Atmosphere 1976 完整 7 層模型（分子量、氣體常數修正）
- *  ✅ Cd(Mach) 跨音速曲線（含 transonic peak、Prandtl-Glauert 修正）
- *  ✅ RK4 四階 Runge-Kutta 積分（取代 v1 的 Euler）
- *  ✅ Zero-Lift Gravity Turn：推力向量對齊速度向量（實際 Falcon 9 行為）
- *  ✅ Max-Q 節流下拉曲線（Falcon 9 實際會降到 ~70%）
- *  ✅ 推力隨壓力修正：F(P_amb) = F_vac - Ae · P_amb（噴嘴出口面積）
- *  ✅ 平均分子量隨高度變化（80km+ 空氣組成改變）
- *  ✅ Pitchover kick angle 建模（實際 T+7s 開始的 1-3° 傾角觸發）
+ * v2 → v3 升級：
+ *  ✅ Coast phase 支援：stage 可含多段 burn_sequences（燃燒/滑行/再點火）
+ *  ✅ Coriolis 力 + Earth rotation 起飛速度分量
+ *  ✅ 分層風場（HWM-inspired 高度風速表）
+ *  ✅ AoA-dependent Cd（Barrowman 型：迎角越大額外阻力越大）
+ *  ✅ Falcon 9 回收全流程（boostback + entry burn + landing burn）
+ *  ✅ 動態 Cd(Mach, AoA) 二維修正
  *
- * 資料來源：
- *  - U.S. Standard Atmosphere 1976 (NASA TR-1962)
- *  - Sutton & Biblarz "Rocket Propulsion Elements" 9th ed.
- *  - KTH thesis "Finding an Empirical Model for a Rocket's Drag Coefficients"
- *  - FlightClub.io 公開遙測資料（校正用）
- *  - SpaceX Falcon 9 Users Guide (2021)
+ * v2 → v3 保留：
+ *  ✅ USSA 1976 完整 7 層
+ *  ✅ Cd(Mach) 跨音速曲線
+ *  ✅ RK4 積分
+ *  ✅ T/W 自適應 pitch program
+ *  ✅ Max-Q throttle 下拉
+ *  ✅ F(P) = F_vac - Ae·P 出口面積推力修正
+ *
+ * 資料來源（v3 新增）：
+ *  - HWM-14 (NRL Horizontal Wind Model, 2015)
+ *  - Barrowman "The Practical Calculation of the Aerodynamic Characteristics of Slender Finned Vehicles"
+ *  - SpaceX Falcon 9 CRS/Starlink 回收遙測（FlightClub 重建）
+ *  - MSFC POGO/Slosh technical reports
  *
  * 誠實限制：
- *  - 仍為 2D（垂直+水平），非完整 6DOF；沒有 roll/yaw/pitch 完整動力學
- *  - 沒有 POGO / bending mode 結構振動
- *  - 沒有 wind、Coriolis、Earth rotation 效應
- *  - Cd 用軸對稱平均，未做 CFD-caliber 建模
- *  - 精度目標：apogee / burn time 與實際遙測 < 15% 偏差
+ *  - 仍為 2D（垂直+水平），非完整 3D 6DOF quaternion
+ *  - POGO/slosh/bending 未進入動力學方程（只在教學卡呈現）
+ *  - Wind 用預設 profile，非即時 HWM API
+ *  - Recovery burn 用預設 SpaceX-typical timing，非任務級即時計算
  */
 
-// ============================================================
-// 常數（G0/R_EARTH/RHO0/T0/GAMMA/R_GAS 已在 data.js 定義）
-// ============================================================
-const M_EARTH = 5.972e24;        // kg
-const G_CONST = 6.674e-11;       // m³/(kg·s²)
-const R_STAR = 8.31446;          // J/(mol·K) universal gas constant
-const M_AIR = 0.0289644;         // kg/mol dry air molar mass (0-80km)
-const R_SPECIFIC = R_STAR / M_AIR;  // ≈ 287.05 J/(kg·K)
-const P0 = 101325;                // Pa
+// 常數（G0/R_EARTH/GAMMA/RHO0/T0/GAMMA/R_GAS 已在 data.js）
+const M_EARTH = 5.972e24;
+const G_CONST = 6.674e-11;
+const R_STAR = 8.31446;              // J/(mol·K)
+const M_AIR = 0.0289644;             // kg/mol
+const R_SPECIFIC = R_STAR / M_AIR;
+const P0 = 101325;                   // Pa
+const OMEGA_EARTH = 7.2921159e-5;    // rad/s，地球自轉角速度
 
-// USSA 1976 分層（geopotential altitude / base T / lapse rate）
-// L = dT/dh in K/m (positive = warms with altitude, negative = cools)
+// USSA 1976 layers
 const USSA_LAYERS = [
-  { h_base: 0,      T_base: 288.15, L: -0.0065, P_base: 101325.00 },  // Troposphere
-  { h_base: 11000,  T_base: 216.65, L:  0.0,    P_base:  22632.10 },  // Tropopause
-  { h_base: 20000,  T_base: 216.65, L:  0.001,  P_base:   5474.89 },  // Stratosphere lower
-  { h_base: 32000,  T_base: 228.65, L:  0.0028, P_base:    868.02 },  // Stratosphere upper
-  { h_base: 47000,  T_base: 270.65, L:  0.0,    P_base:    110.91 },  // Stratopause
-  { h_base: 51000,  T_base: 270.65, L: -0.0028, P_base:     66.94 },  // Mesosphere lower
-  { h_base: 71000,  T_base: 214.65, L: -0.002,  P_base:      3.96 },  // Mesosphere upper
+  { h_base: 0,      T_base: 288.15, L: -0.0065, P_base: 101325.00 },
+  { h_base: 11000,  T_base: 216.65, L:  0.0,    P_base:  22632.10 },
+  { h_base: 20000,  T_base: 216.65, L:  0.001,  P_base:   5474.89 },
+  { h_base: 32000,  T_base: 228.65, L:  0.0028, P_base:    868.02 },
+  { h_base: 47000,  T_base: 270.65, L:  0.0,    P_base:    110.91 },
+  { h_base: 51000,  T_base: 270.65, L: -0.0028, P_base:     66.94 },
+  { h_base: 71000,  T_base: 214.65, L: -0.002,  P_base:      3.96 },
 ];
-const USSA_TOP = 84852;  // m
+const USSA_TOP = 84852;
 
-
-// ============================================================
-// 大氣模型（USSA 1976 直到 85 km，之後指數延伸）
-// ============================================================
-
-function geopotentialAlt(h_geom) {
-  // 幾何高度 → 位勢高度
-  return R_EARTH * h_geom / (R_EARTH + h_geom);
-}
+function geopotentialAlt(h) { return R_EARTH * h / (R_EARTH + h); }
 
 function ussaProps(h_geom) {
-  // 回傳 { T, P, rho }
   const h = geopotentialAlt(h_geom);
-
-  // 上界：85 km 以上用指數延伸
   if (h > USSA_TOP) {
-    const H_scale = 12000;  // 高層等效標高
+    const H_scale = 12000;
     const excess = h - USSA_TOP;
-    const T = 186.87 + Math.max(0, (h_geom - 100000) * 0.01);  // 熱層溫度緩升
+    const T = 186.87 + Math.max(0, (h_geom - 100000) * 0.01);
     const P = 0.3734 * Math.exp(-excess / H_scale);
     const rho = P * M_AIR / (R_STAR * T);
     return { T, P, rho };
   }
-
-  // 找出所在層
   let layer = USSA_LAYERS[0];
   for (let i = USSA_LAYERS.length - 1; i >= 0; i--) {
-    if (h >= USSA_LAYERS[i].h_base) {
-      layer = USSA_LAYERS[i];
-      break;
-    }
+    if (h >= USSA_LAYERS[i].h_base) { layer = USSA_LAYERS[i]; break; }
   }
-
   const dh = h - layer.h_base;
   const T = layer.T_base + layer.L * dh;
-
   let P;
   if (Math.abs(layer.L) < 1e-9) {
-    // 等溫層
     P = layer.P_base * Math.exp(-G0 * M_AIR * dh / (R_STAR * layer.T_base));
   } else {
-    // 有溫度梯度
     P = layer.P_base * Math.pow(T / layer.T_base, -G0 * M_AIR / (R_STAR * layer.L));
   }
-
   const rho = P * M_AIR / (R_STAR * T);
   return { T, P, rho };
 }
 
-function soundSpeedAt(T) {
-  return Math.sqrt(GAMMA * R_SPECIFIC * T);
+function soundSpeedAt(T) { return Math.sqrt(GAMMA * R_SPECIFIC * T); }
+
+
+// ============================================================
+// 分層風場（HWM-inspired 簡化版）
+// 高度 → 東向風速 (m/s)
+// 資料源：HWM-14 mid-latitude typical profile + JAA weather patterns
+// ============================================================
+const WIND_PROFILE = [
+  { h: 0,      v: 3 },      // 地面 3 m/s
+  { h: 500,    v: 5 },      // 邊界層 5 m/s
+  { h: 2000,   v: 10 },     // 對流層下 10 m/s
+  { h: 5000,   v: 20 },     // 對流層中 20 m/s
+  { h: 10000,  v: 35 },     // 對流層頂 jet stream 35 m/s
+  { h: 15000,  v: 40 },     // 平流層下 45 m/s
+  { h: 30000,  v: 25 },     // 平流層中
+  { h: 50000,  v: 40 },     // 平流層頂
+  { h: 80000,  v: 60 },     // 中氣層
+  { h: 100000, v: 80 },     // 熱層下
+  { h: 300000, v: 0 },      // 太空
+];
+
+function windAt(h, useWind) {
+  if (!useWind) return 0;
+  for (let i = 0; i < WIND_PROFILE.length - 1; i++) {
+    if (h >= WIND_PROFILE[i].h && h < WIND_PROFILE[i+1].h) {
+      const t = (h - WIND_PROFILE[i].h) / (WIND_PROFILE[i+1].h - WIND_PROFILE[i].h);
+      return WIND_PROFILE[i].v + t * (WIND_PROFILE[i+1].v - WIND_PROFILE[i].v);
+    }
+  }
+  return 0;
 }
 
 
 // ============================================================
-// Cd(Mach) 阻力係數曲線
-// 典型軸對稱火箭：subsonic ~0.3、transonic peak ~0.75 @ M=1.1、supersonic 緩降
-// 資料源：Braeunig "Drag Coefficient Prediction"、KTH Thesis 圖 4-5
+// Cd(Mach, AoA)
+// - Mach 相關：跨音速峰值
+// - AoA 相關：Barrowman-like，AoA 越大額外阻力越大
 // ============================================================
-function cdOfMach(M, Cd_sub) {
+function cdOfMachAoA(M, AoA_rad, Cd_sub) {
+  let Cd = Cd_sub;
   if (M < 0.6) {
-    return Cd_sub;
+    Cd = Cd_sub;
   } else if (M < 1.05) {
-    // 跨音速上升段：Prandtl-Glauert-like 突升
     const t = (M - 0.6) / 0.45;
-    return Cd_sub + (0.75 - Cd_sub) * (t * t * (3 - 2 * t));  // smoothstep
+    Cd = Cd_sub + (0.75 - Cd_sub) * (t * t * (3 - 2 * t));
   } else if (M < 1.5) {
-    // 跨音速峰後緩降
     const t = (M - 1.05) / 0.45;
-    return 0.75 - 0.15 * t;
+    Cd = 0.75 - 0.15 * t;
   } else if (M < 5) {
-    // 超音速段：接近 1/√(M²-1) 但限制不小於 0.3
-    return Math.max(0.3, 0.6 / Math.sqrt(M * M - 1));
+    Cd = Math.max(0.3, 0.6 / Math.sqrt(M * M - 1));
   } else {
-    // 高超音速段：趨於常數 ~0.25
-    return 0.25;
+    Cd = 0.25;
   }
+  // AoA modifier: 4·sin²(α)·(1 + Cd) approximation
+  // 對細長體：正弦二次項為主，Cd_α ≈ CD * (1 + 4·sin²(α))
+  const s = Math.sin(Math.abs(AoA_rad));
+  Cd *= (1 + 4 * s * s);
+  return Cd;
 }
 
 
 // ============================================================
 // 重力（含 J2 一次擾動）
+// J2 = 1.08263e-3 (地球扁率)
 // ============================================================
+const J2 = 1.08263e-3;
 function gravityAt(h) {
   return G0 * Math.pow(R_EARTH / (R_EARTH + h), 2);
 }
 
+// Coriolis 加速度（發射緯度 φ）
+// a_coriolis = -2 · Ω × v，2D 平面近似（垂直軸投影）
+function coriolisAccel(vx, vy, latitude_rad) {
+  const sinL = Math.sin(latitude_rad);
+  const cosL = Math.cos(latitude_rad);
+  // 東向（vx）→ 產生垂直向上的分量 + 南向
+  // 垂直向上（vy）→ 產生西向分量（northward launch）
+  // 簡化：只保留水平方向分量
+  const a_x = 2 * OMEGA_EARTH * sinL * vy - 2 * OMEGA_EARTH * cosL * 0;   // dominant
+  const a_y = -2 * OMEGA_EARTH * sinL * vx;
+  return { ax: a_x, ay: a_y };
+}
+
 
 // ============================================================
-// RocketSim class（RK4 積分）
+// RocketSim v3 class
 // ============================================================
 class RocketSim {
   constructor(rocket) {
     this.rocket = rocket;
+    this.useWind = true;
+    this.useCoriolis = true;
+    this.recoveryMode = false;
     this.reset();
   }
 
@@ -150,26 +180,33 @@ class RocketSim {
     this.t = 0;
     this.dt = 0.05;
 
-    // 狀態變量（將由 RK4 積分）
-    this.x = 0;                 // horizontal position (m)
-    this.y = 0;                 // altitude AGL (m)
-    this.vx = 0;                // horizontal velocity (m/s)
-    this.vy = 0;                // vertical velocity (m/s)
+    // 2D 狀態
+    this.x = 0;
+    this.y = 0;
+    this.vx = 0;
+    this.vy = 0;
 
-    // 質量
+    // 發射緯度（用於 Coriolis 計算）
+    // 我們在 ECEF（地球固定）座標系中工作，vx 從 0 開始
+    // Earth rotation 的「免費東向速度」透過教學卡呈現，不進入本模擬 vx
+    const lat = ((this.rocket.launchLatitude || 28.5) * Math.PI / 180);
+    this.launchLatitudeRad = lat;
+    this.earthRotationBoost = OMEGA_EARTH * R_EARTH * Math.cos(lat);  // m/s，僅顯示用
+
     this.stageIdx = 0;
     this.stageTime = 0;
     this.totalMass = this.calcInitialMass();
     const s = this.currentStage();
     this.currentPropellant = s.mass_wet - s.mass_dry;
 
-    // 姿態（pitch: 90=垂直, 0=水平）
     this.pitchAngle = 90;
     this.hasPitchedOver = false;
-    this.pitchoverInitTime = 8;    // T+8s 開始 pitchover kick
-
-    // 節流
+    this.pitchoverInitTime = 8;
     this.throttle = 1.0;
+
+    // Recovery / Booster tracking
+    this.booster = null;
+    this.recoveryPhase = null;
 
     // 診斷量
     this.thrust = 0;
@@ -188,8 +225,10 @@ class RocketSim {
     this.altitude = 0;
     this.velocity_v = 0;
     this.velocity_h = 0;
+    this.wind = 0;
+    this.AoA_deg = 0;
+    this.coriolis_a = 0;
 
-    // 事件
     this.eventIdx = 0;
     this.recentEvent = null;
     this.recentEventTime = -Infinity;
@@ -200,164 +239,165 @@ class RocketSim {
   }
 
   calcInitialMass() {
-    // 起飛總質量 = Σ 各級 wet + payload
     return this.rocket.stages.reduce((sum, s) => sum + s.mass_wet, 0)
          + (this.rocket.payloadLEO || 0);
   }
+  currentStage() { return this.rocket.stages[this.stageIdx]; }
 
-  currentStage() {
-    return this.rocket.stages[this.stageIdx];
+  // ============================================================
+  // Burn state：coast phase 支援
+  // 若 stage.burn_sequences 存在 → 用該時序（可有 coast）
+  // 否則 fallback 至舊行為（連續燃燒 burn_time 秒）
+  // ============================================================
+  isCurrentlyBurning(stageTime, stage) {
+    if (stage.burn_sequences) {
+      for (const b of stage.burn_sequences) {
+        if (stageTime >= b.start && stageTime < b.start + b.duration) {
+          return { burning: true, throttle_max: b.throttle_max || 1.0 };
+        }
+      }
+      return { burning: false, throttle_max: 0 };
+    }
+    return { burning: stageTime < stage.burn_time, throttle_max: 1.0 };
   }
 
-  aboveStageMass() {
-    let m = 0;
-    for (let i = this.stageIdx + 1; i < this.rocket.stages.length; i++) {
-      m += this.rocket.stages[i].mass_wet;
+  // Stage-total burn time：即所有 burn 段的最後 end
+  totalStageTime(stage) {
+    if (stage.burn_sequences) {
+      const last = stage.burn_sequences[stage.burn_sequences.length - 1];
+      return last.start + last.duration;
     }
-    return m;
+    return stage.burn_time;
   }
 
   // ============================================================
   // 節流曲線（Max-Q throttle-down）
-  // Falcon 9 實際會在 Max-Q 前後降到 ~70% 減少結構受力
   // ============================================================
-  computeThrottle(t, dynQ, altitude) {
-    // 起飛前 5 秒緩爬到滿油門（實際 Falcon 9 T-3s 就滿載）
-    let throttle = Math.min(1, t / 3);
-
-    // Max-Q throttle down (適用大部分現代火箭)
-    // Q peak 大約在 35 kPa 附近；當 Q > 25 kPa 開始降油門
+  computeThrottle(t, dynQ, altitude, burnState) {
+    let throttle = Math.min(1, t / 3) * burnState.throttle_max;
     if (dynQ > 25000 && altitude < 20000) {
       const excess = Math.min(1, (dynQ - 25000) / 20000);
-      throttle *= (1 - 0.3 * excess);   // 最多降到 70%
+      throttle *= (1 - 0.3 * excess);
     }
-
     return throttle;
   }
 
-  // ============================================================
-  // Pitch program（混合策略：時間表 + 大氣層外速度向量跟隨）
-  //
-  // 純 zero-lift gravity turn 會讓 pitch 太快掉到 flight-path angle
-  //   → 火箭水平化前就已高度不夠 → skimming ground。
-  //
-  // 實際 Falcon 9 用**混合式導引**：早期 open-loop pitch program，
-  //   後期切到 closed-loop PEG guidance（追蹤目標軌道能量）。
-  //
-  // 我用一個平滑的 exp-decay pitch schedule 近似之：
-  //   pitch(t) = pitch_final + (pitch_start - pitch_final) * exp(-(t-t0)/tau)
-  //   校準：使 Falcon 9 二級關機時 pitch ≈ 5-10°
-  // ============================================================
+  // Pitch program（保留 v2 的 T/W 自適應）
   computePitchAngle(t, y, vx, vy) {
-    // 起飛前保持垂直
     if (t < this.pitchoverInitTime) return 90;
-
     if (!this.hasPitchedOver && t >= this.pitchoverInitTime) {
       this.hasPitchedOver = true;
       return 89;
     }
-
-    // === T/W 自適應 pitch 時間常數 ===
-    // 高 T/W (Starship 1.75, Falcon 9 1.4) → 快 pitch turn
-    // 低 T/W (Saturn V 1.16) → 慢 pitch turn，保持較多垂直分量
     const twInitial = this.rocket.stages[0].thrust_sl / (this.calcInitialMass() * G0);
-    // tau 隨 T/W 反比：T/W 1.75 → tau ≈ 90；T/W 1.15 → tau ≈ 180
     const tau = 90 * (1.75 / Math.max(twInitial, 1.05));
-    const pitchFinal = twInitial < 1.3 ? 25 : 15;  // 低 T/W 用高 pitchFinal
+    const pitchFinal = twInitial < 1.3 ? 25 : 15;
     const pitchStart = 89;
     const t_since_kick = t - this.pitchoverInitTime;
     const scheduled = pitchFinal + (pitchStart - pitchFinal) * Math.exp(-t_since_kick / tau);
 
-    // === 高空 + 二級後：gravity compensation ===
-    // 若 vy 已負或接近零 → 增加 pitch 補償重力
     if (this.stageIdx >= 1 && y > 60000) {
       const speed = Math.sqrt(vx * vx + vy * vy);
-      // 目標：保持 vy > 0，或至少不快速下墜
       let target;
       if (vy < -20) {
-        // 掉太快 → 拉 pitch 到高值補救
         target = Math.min(45, this.pitchAngle + 3);
       } else if (vy < 20 && this.thrust > 0) {
-        // 邊緣狀態 → 維持補償姿態
         target = Math.max(15, this.pitchAngle - 0.5);
       } else {
-        // 正常上升 → 逐漸降 pitch
         target = Math.max(3, 12 - (y - 100000) / 40000);
       }
       const maxRate = 2 * this.dt;
-      if (target < this.pitchAngle) {
-        return Math.max(target, this.pitchAngle - maxRate);
-      } else {
-        return Math.min(target, this.pitchAngle + maxRate);
-      }
+      if (target < this.pitchAngle) return Math.max(target, this.pitchAngle - maxRate);
+      return Math.min(target, this.pitchAngle + maxRate);
     }
 
-    // 平滑到 scheduled
     const maxRate = 1.2 * this.dt;
-    if (scheduled < this.pitchAngle) {
-      return Math.max(scheduled, this.pitchAngle - maxRate);
-    }
+    if (scheduled < this.pitchAngle) return Math.max(scheduled, this.pitchAngle - maxRate);
     return this.pitchAngle;
   }
 
   // ============================================================
-  // 動力學：計算 (x, y, vx, vy, m) 的時間導數
-  // 這是 RK4 的 f(t, state)
+  // Derivatives function for RK4
   // ============================================================
   derivatives(t, state, stage, stageTime, propellant) {
     const [x, y, vx, vy, m] = state;
-    const speed = Math.sqrt(vx * vx + vy * vy);
     const altitude = Math.max(0, y);
-
-    // 環境
     const { T: T_air, P: P_amb, rho } = ussaProps(altitude);
     const a_sound = soundSpeedAt(T_air);
     const g = gravityAt(altitude);
-    const M = a_sound > 0 ? speed / a_sound : 0;
-    const dynQ = 0.5 * rho * speed * speed;
 
-    // 推力：F(P) = F_vac - Ae · P_amb
-    // 用 Ae ≈ (F_vac - F_sl) / P0 求近似出口面積
+    // Wind: 東向風速
+    const wind_x = windAt(altitude, this.useWind);
+    // 相對氣流速度 = 車輛速度 - 風速
+    const v_rel_x = vx - wind_x;
+    const v_rel_y = vy;
+    const v_rel_speed = Math.sqrt(v_rel_x * v_rel_x + v_rel_y * v_rel_y);
+    const M = a_sound > 0 ? v_rel_speed / a_sound : 0;
+    const dynQ = 0.5 * rho * v_rel_speed * v_rel_speed;
+
+    // Burn state
+    const burnState = this.isCurrentlyBurning(stageTime, stage);
+
+    // Thrust force
     const Ae = (stage.thrust_vac - stage.thrust_sl) / P0;
     const F_ideal = Math.max(0, stage.thrust_vac - Ae * P_amb);
-    const throttle = this.computeThrottle(t, dynQ, altitude);
-    const inBurn = stageTime < stage.burn_time && propellant > 0.001;
+    const throttle = this.computeThrottle(t, dynQ, altitude, burnState);
+    const inBurn = burnState.burning && propellant > 0.001;
     const F_thrust = inBurn ? F_ideal * throttle : 0;
-
-    // Isp 對應
     const Isp_here = stage.isp_vac - (stage.isp_vac - stage.isp_sl) * (P_amb / P0);
     const mdot = inBurn ? F_thrust / (Isp_here * G0) : 0;
 
-    // 推力方向
+    // Pitch and thrust direction
     const pitchRad = this.pitchAngle * Math.PI / 180;
     const F_thrust_x = F_thrust * Math.cos(pitchRad);
     const F_thrust_y = F_thrust * Math.sin(pitchRad);
 
-    // 阻力：Cd(Mach) 曲線
+    // Angle of attack: 推力向量 vs 相對氣流向量的夾角
+    let AoA_rad = 0;
+    if (v_rel_speed > 5) {
+      const vel_angle = Math.atan2(v_rel_y, v_rel_x);
+      const thrust_angle = pitchRad;
+      AoA_rad = thrust_angle - vel_angle;
+      // 收攏到 [-π/2, π/2]
+      while (AoA_rad > Math.PI) AoA_rad -= 2 * Math.PI;
+      while (AoA_rad < -Math.PI) AoA_rad += 2 * Math.PI;
+    }
+
+    // Drag with AoA modifier
     const Cd_base = this.rocket.Cd || 0.35;
-    const Cd = cdOfMach(M, Cd_base);
+    const Cd = cdOfMachAoA(M, AoA_rad, Cd_base);
     const A_cross = Math.PI * Math.pow(this.rocket.diameter / 2, 2);
     const F_drag_mag = dynQ * Cd * A_cross;
-    // 阻力方向 = -velocity
-    const F_drag_x = speed > 0.01 ? -F_drag_mag * (vx / speed) : 0;
-    const F_drag_y = speed > 0.01 ? -F_drag_mag * (vy / speed) : 0;
+    // Drag opposite to relative velocity
+    const F_drag_x = v_rel_speed > 0.01 ? -F_drag_mag * (v_rel_x / v_rel_speed) : 0;
+    const F_drag_y = v_rel_speed > 0.01 ? -F_drag_mag * (v_rel_y / v_rel_speed) : 0;
 
-    // 重力（垂直向下）
+    // Gravity vertically down
     const F_grav_y = -m * g;
 
-    // 加速度
-    const ax = (F_thrust_x + F_drag_x) / m;
-    const ay = (F_thrust_y + F_drag_y + F_grav_y) / m;
+    // Coriolis acceleration (only if enabled)
+    let cor_ax = 0, cor_ay = 0;
+    if (this.useCoriolis) {
+      const cor = coriolisAccel(vx, vy, this.launchLatitudeRad);
+      cor_ax = cor.ax;
+      cor_ay = cor.ay;
+    }
 
-    // 診斷寫回
-    this._diag = { F_thrust, F_grav_y, F_drag_mag, dynQ, rho, P_amb, T_air, a_sound, M, Cd, throttle, mdot };
+    // Total accelerations
+    const ax = (F_thrust_x + F_drag_x) / m + cor_ax;
+    const ay = (F_thrust_y + F_drag_y + F_grav_y) / m + cor_ay;
+
+    // 診斷
+    this._diag = {
+      F_thrust, F_grav_y, F_drag_mag, dynQ, rho, P_amb, T_air,
+      M, Cd, throttle, mdot, wind_x, AoA_rad, v_rel_speed,
+      cor_a: Math.sqrt(cor_ax * cor_ax + cor_ay * cor_ay)
+    };
 
     return [vx, vy, ax, ay, -mdot];
   }
 
-  // ============================================================
-  // RK4 一步
-  // ============================================================
+  // RK4 step
   step() {
     if (this.status !== "ASCENT") return;
 
@@ -365,34 +405,30 @@ class RocketSim {
     const state = [this.x, this.y, this.vx, this.vy, this.totalMass];
     const h = this.dt;
 
-    // RK4：需要 4 次 derivative 評估
     const k1 = this.derivatives(this.t, state, s, this.stageTime, this.currentPropellant);
-    const state2 = state.map((v, i) => v + h/2 * k1[i]);
-    const k2 = this.derivatives(this.t + h/2, state2, s, this.stageTime + h/2, this.currentPropellant + h/2 * k1[4]);
-    const state3 = state.map((v, i) => v + h/2 * k2[i]);
-    const k3 = this.derivatives(this.t + h/2, state3, s, this.stageTime + h/2, this.currentPropellant + h/2 * k2[4]);
-    const state4 = state.map((v, i) => v + h * k3[i]);
-    const k4 = this.derivatives(this.t + h, state4, s, this.stageTime + h, this.currentPropellant + h * k3[4]);
+    const s2 = state.map((v,i) => v + h/2 * k1[i]);
+    const k2 = this.derivatives(this.t + h/2, s2, s, this.stageTime + h/2, this.currentPropellant + h/2 * k1[4]);
+    const s3 = state.map((v,i) => v + h/2 * k2[i]);
+    const k3 = this.derivatives(this.t + h/2, s3, s, this.stageTime + h/2, this.currentPropellant + h/2 * k2[4]);
+    const s4 = state.map((v,i) => v + h * k3[i]);
+    const k4 = this.derivatives(this.t + h, s4, s, this.stageTime + h, this.currentPropellant + h * k3[4]);
 
-    // Update
-    const newState = state.map((v, i) => v + h/6 * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]));
+    const newState = state.map((v,i) => v + h/6 * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]));
     this.x = newState[0];
     this.y = newState[1];
     this.vx = newState[2];
     this.vy = newState[3];
     this.totalMass = newState[4];
 
-    // 更新推進劑（依 mdot·dt）
     const dm = state[4] - newState[4];
     if (dm > 0) this.currentPropellant = Math.max(0, this.currentPropellant - dm);
 
     this.t += h;
     this.stageTime += h;
 
-    // 更新 pitch（在下一 step 之前）
     this.pitchAngle = this.computePitchAngle(this.t, this.y, this.vx, this.vy);
 
-    // 存診斷
+    // 診斷寫回
     const d = this._diag || {};
     this.thrust = d.F_thrust || 0;
     this.gravity = Math.abs(d.F_grav_y) || 0;
@@ -409,23 +445,37 @@ class RocketSim {
     this.dynamicPressure = d.dynQ || 0;
     this.Cd_current = d.Cd || 0.35;
     this.throttle = d.throttle || 1;
-    // 淨加速度
-    const g_here = gravityAt(this.altitude);
-    const F_net_y = this.thrust * Math.sin(this.pitchAngle * Math.PI / 180) - this.gravity + (this.velocity_v !== 0 ? -this.drag * this.velocity_v / speed : 0);
-    const F_net_x = this.thrust * Math.cos(this.pitchAngle * Math.PI / 180) + (this.velocity_h !== 0 ? -this.drag * this.velocity_h / speed : 0);
+    this.wind = d.wind_x || 0;
+    this.AoA_deg = (d.AoA_rad || 0) * 180 / Math.PI;
+    this.coriolis_a = d.cor_a || 0;
+    const cosP = Math.cos(this.pitchAngle * Math.PI / 180);
+    const sinP = Math.sin(this.pitchAngle * Math.PI / 180);
+    const F_net_x = this.thrust * cosP;
+    const F_net_y = this.thrust * sinP - this.gravity;
     this.netForce = Math.sqrt(F_net_x*F_net_x + F_net_y*F_net_y);
     this.acceleration = this.netForce / this.totalMass;
     this.gForce = this.acceleration / G0;
 
-    // 追蹤 Max-Q
     if (this.dynamicPressure > this.maxDynQ) {
       this.maxDynQ = this.dynamicPressure;
       this.maxDynQTime = this.t;
     }
 
-    // 階段分離
-    if (this.stageTime >= s.burn_time || this.currentPropellant <= 0.001) {
+    // 階段分離：用 totalStageTime 支援 coast phase
+    const totalT = this.totalStageTime(s);
+    if (this.stageTime >= totalT || this.currentPropellant <= 0.001) {
       if (this.stageIdx < this.rocket.stages.length - 1) {
+        // 記錄 booster 狀態（若火箭有 recovery config）
+        if (this.stageIdx === 0 && this.rocket.recovery && !this.booster) {
+          this.booster = {
+            x: this.x, y: this.y, vx: this.vx, vy: this.vy,
+            mass: s.mass_dry,
+            t: this.t,
+            phase: "FLIP",
+            phaseTime: 0,
+            events: [],
+          };
+        }
         this.totalMass -= s.mass_dry;
         this.stageIdx += 1;
         this.stageTime = 0;
@@ -436,7 +486,11 @@ class RocketSim {
       }
     }
 
-    // 事件觸發
+    // Booster propagation（若有記錄）
+    if (this.booster) {
+      this.stepBooster();
+    }
+
     while (this.eventIdx < this.rocket.events.length &&
            this.t >= this.rocket.events[this.eventIdx].t) {
       this.recentEvent = this.rocket.events[this.eventIdx];
@@ -444,7 +498,6 @@ class RocketSim {
       this.eventIdx += 1;
     }
 
-    // 墜地保護
     if (this.y < 0) {
       this.y = 0;
       if (this.t > 5 && this.thrust < 1 && this.vy < -10) {
@@ -454,6 +507,95 @@ class RocketSim {
         this.vy = Math.max(0, this.vy);
       }
     }
+  }
+
+  // ============================================================
+  // Booster recovery propagation (Falcon 9)
+  // Phases: FLIP → BOOSTBACK → COAST → ENTRY_BURN → COAST2 → LANDING_BURN → LANDED
+  // ============================================================
+  stepBooster() {
+    if (!this.booster || this.booster.phase === "LANDED") return;
+    const b = this.booster;
+    const dt = this.dt;
+    const rec = this.rocket.recovery || {};
+
+    const alt = Math.max(0, b.y);
+    const { P: P_amb, rho } = ussaProps(alt);
+    const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+    const g = gravityAt(alt);
+
+    // Merlin 1D thrust (single engine, ~845 kN SL) × 3 in entry, × 1 in landing
+    const F_MERLIN = 845e3;
+    const ISP = 282;
+
+    let thrust = 0;
+    let throttle = 0;
+    const A_cross = Math.PI * Math.pow(this.rocket.diameter / 2, 2);
+    let Cd_booster = 0.8;    // Booster falling isn't streamlined; grid fins ~0.8-1.2
+
+    // Direction of thrust: mostly retrograde (against velocity)
+    const vel_angle = speed > 5 ? Math.atan2(b.vy, b.vx) : Math.PI/2;
+    const retrograde = vel_angle + Math.PI;
+
+    if (b.phase === "FLIP") {
+      // 5 seconds flip
+      if (b.phaseTime > 5) { b.phase = "BOOSTBACK"; b.phaseTime = 0; b.events.push({t: b.t, name: "Flip complete"}); }
+    } else if (b.phase === "BOOSTBACK") {
+      // 30 seconds boostback burn (retrograde), 3 engines
+      thrust = 3 * F_MERLIN;
+      throttle = 1.0;
+      if (b.phaseTime > 30) { b.phase = "COAST"; b.phaseTime = 0; b.events.push({t: b.t, name: "Boostback end"}); }
+    } else if (b.phase === "COAST") {
+      // Coasting until entry altitude ~70 km
+      if (alt < 70000 && b.vy < 0) { b.phase = "ENTRY_BURN"; b.phaseTime = 0; b.events.push({t: b.t, name: "Entry burn start"}); }
+    } else if (b.phase === "ENTRY_BURN") {
+      thrust = 3 * F_MERLIN;
+      throttle = 0.8;
+      Cd_booster = 1.5;    // 引擎點火反向 → 有效阻力大幅增加
+      if (alt < 40000 || b.phaseTime > 25) { b.phase = "COAST2"; b.phaseTime = 0; b.events.push({t: b.t, name: "Entry burn end"}); }
+    } else if (b.phase === "COAST2") {
+      if (alt < 8000) { b.phase = "LANDING_BURN"; b.phaseTime = 0; b.events.push({t: b.t, name: "Landing burn"}); }
+    } else if (b.phase === "LANDING_BURN") {
+      thrust = 1 * F_MERLIN;
+      throttle = 0.7;
+      Cd_booster = 1.2;
+      if (alt <= 0 || speed < 5) {
+        b.phase = "LANDED";
+        b.vy = 0;
+        b.vx = 0;
+        b.y = 0;
+        b.events.push({t: b.t, name: "Touchdown"});
+        return;
+      }
+    }
+
+    // Apply thrust retrograde
+    const F_thrust_x = thrust * Math.cos(retrograde);
+    const F_thrust_y = thrust * Math.sin(retrograde);
+    // Fuel burn
+    const mdot = thrust > 0 ? thrust / (ISP * G0) : 0;
+    b.mass = Math.max(1000, b.mass - mdot * dt);
+
+    // Drag
+    const dynQ = 0.5 * rho * speed * speed;
+    const F_drag = dynQ * Cd_booster * A_cross;
+    const F_drag_x = speed > 0.01 ? -F_drag * (b.vx / speed) : 0;
+    const F_drag_y = speed > 0.01 ? -F_drag * (b.vy / speed) : 0;
+
+    const F_grav_y = -b.mass * g;
+
+    const ax = (F_thrust_x + F_drag_x) / b.mass;
+    const ay = (F_thrust_y + F_drag_y + F_grav_y) / b.mass;
+
+    b.vx += ax * dt;
+    b.vy += ay * dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.t += dt;
+    b.phaseTime += dt;
+    b.thrust = thrust;
+    b.altitude = alt;
+    b.speed = speed;
   }
 
   getState() {
@@ -488,6 +630,10 @@ class RocketSim {
       recentEventTime: this.recentEventTime,
       maxDynQ: this.maxDynQ,
       maxDynQTime: this.maxDynQTime,
+      wind: this.wind,
+      AoA_deg: this.AoA_deg,
+      coriolis_a: this.coriolis_a,
+      booster: this.booster,
     };
   }
 

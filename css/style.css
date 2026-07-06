@@ -525,6 +525,40 @@ body {
 }
 .footer a:hover { text-decoration: underline; }
 
+/* ---------- v3 環境 & 回收 ---------- */
+.env-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.env-item {
+  background: rgba(5, 9, 21, 0.5);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.env-label { font-size: 0.75em; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.env-val { font-family: var(--font-num); font-size: 1.1em; font-weight: 700; margin-top: 4px; }
+.env-val small { font-size: 0.6em; color: var(--text-dim); }
+.booster-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85em;
+}
+.booster-phase {
+  font-family: var(--font-num);
+  padding: 8px 10px;
+  background: rgba(88, 199, 255, 0.1);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+}
+.booster-phase.landed { border-color: var(--success); background: rgba(124, 255, 178, 0.1); }
+.booster-phase-name { font-weight: 700; color: var(--accent); }
+.booster-phase.landed .booster-phase-name { color: var(--success); }
+.booster-detail { color: var(--text-dim); }
+
 /* ---------- Accuracy panel ---------- */
 .accuracy-panel { border-left: 3px solid var(--success); }
 .accuracy-table {

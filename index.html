@@ -96,6 +96,37 @@
       <div class="mini-note">實測數據來源：SpaceX 官方 press kit、NASA Space Launch Report、FlightClub.io telemetry reconstruction。誤差 < 15% 視為教學可接受。</div>
     </div>
 
+    <!-- v3 新增：物理環境擾動 -->
+    <div class="panel">
+      <h2>🌪 環境擾動 <span class="tag">v3</span></h2>
+      <div class="env-grid">
+        <div class="env-item">
+          <div class="env-label">風速（東向）</div>
+          <div class="env-val"><span id="envWind">0</span> <small>m/s</small></div>
+        </div>
+        <div class="env-item">
+          <div class="env-label">AoA（迎角）</div>
+          <div class="env-val"><span id="envAoA">0.0</span><small>°</small></div>
+        </div>
+        <div class="env-item">
+          <div class="env-label">Coriolis a</div>
+          <div class="env-val"><span id="envCor">0.00</span> <small>m/s²</small></div>
+        </div>
+        <div class="env-item">
+          <div class="env-label">Earth 旋轉贈速</div>
+          <div class="env-val"><span id="envBoost">0</span> <small>m/s</small></div>
+        </div>
+      </div>
+      <div class="mini-note">風場：HWM-inspired 分層 profile；Coriolis: a = -2Ω×v；緯度越低東向贈速越大（法屬蓋亞那 465 m/s）</div>
+    </div>
+
+    <!-- v3 新增：Booster 回收狀態（Falcon 9 專屬） -->
+    <div class="panel" id="boosterPanel" style="display:none">
+      <h2>🚁 一級回收 <span class="tag">Falcon 9 專屬</span></h2>
+      <div id="boosterInfo" class="booster-info"></div>
+      <div class="mini-note">Falcon 9 三段回收：Flip → Boostback (3 engine, 30s) → Entry burn (70→40 km) → Landing burn (8 km hoverslam)。SpaceX 已回收 598+ 次。</div>
+    </div>
+
     <!-- 力學圖 -->
     <div class="panel">
       <h2>⚖️ 飛行受力（即時）</h2>

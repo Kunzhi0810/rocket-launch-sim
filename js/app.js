@@ -254,6 +254,40 @@ function updateDashboard() {
   // Timeline
   renderTimeline(r, state);
 
+  // v3: env 面板
+  $("envWind").textContent = state.wind ? state.wind.toFixed(1) : "0";
+  $("envAoA").textContent = state.AoA_deg ? state.AoA_deg.toFixed(1) : "0.0";
+  $("envCor").textContent = state.coriolis_a ? state.coriolis_a.toFixed(3) : "0.000";
+  $("envBoost").textContent = sim.earthRotationBoost ? sim.earthRotationBoost.toFixed(0) : "0";
+
+  // v3: booster 面板（Falcon 9 專屬）
+  const boosterPanel = $("boosterPanel");
+  if (state.booster) {
+    boosterPanel.style.display = "block";
+    const b = state.booster;
+    const phaseNames = {
+      FLIP: "🔄 Flip Maneuver",
+      BOOSTBACK: "🔥 Boostback Burn (3 engines)",
+      COAST: "🌀 Ballistic Coast",
+      ENTRY_BURN: "🔥 Entry Burn (70→40 km)",
+      COAST2: "🌀 Terminal Descent",
+      LANDING_BURN: "🎯 Landing Burn (hoverslam)",
+      LANDED: "✅ Landed",
+    };
+    const isLanded = b.phase === "LANDED";
+    $("boosterInfo").innerHTML = `
+      <div class="booster-phase ${isLanded ? 'landed' : ''}">
+        <span class="booster-phase-name">${phaseNames[b.phase] || b.phase}</span>
+        <span class="booster-detail">alt ${((b.altitude || 0)/1000).toFixed(1)} km · v ${(b.speed || 0).toFixed(0)} m/s</span>
+      </div>
+      ${(b.events || []).slice(-4).reverse().map(e =>
+        `<div class="booster-detail">T+${(e.t).toFixed(0)}s · ${e.name}</div>`
+      ).join("")}
+    `;
+  } else {
+    boosterPanel.style.display = "none";
+  }
+
   // Track sim milestones + update accuracy panel
   trackSimMilestones(state);
   renderAccuracy(r);
